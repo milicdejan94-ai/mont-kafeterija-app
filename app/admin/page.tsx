@@ -919,12 +919,31 @@ function StockView({
   stockMap: Record<string, number>;
 }) {
   const [search, setSearch] = useState("");
+  const [sortMode, setSortMode] = useState<"az" | "most" | "least">("az");
 
-  const visibleProducts = sortProductsAZ(
-    products
+  const visibleProducts = useMemo(() => {
+    const filtered = products
       .filter((p) => p.active)
-      .filter((p) => productMatchesSearch(p, search))
-  );
+      .filter((p) => productMatchesSearch(p, search));
+
+    if (sortMode === "most") {
+      return [...filtered].sort((a, b) => {
+        const qa = Number(stockMap[`${a.id}_${location}`] ?? 0);
+        const qb = Number(stockMap[`${b.id}_${location}`] ?? 0);
+        return qb - qa || a.name.localeCompare(b.name, "bs");
+      });
+    }
+
+    if (sortMode === "least") {
+      return [...filtered].sort((a, b) => {
+        const qa = Number(stockMap[`${a.id}_${location}`] ?? 0);
+        const qb = Number(stockMap[`${b.id}_${location}`] ?? 0);
+        return qa - qb || a.name.localeCompare(b.name, "bs");
+      });
+    }
+
+    return sortProductsAZ(filtered);
+  }, [products, stockMap, location, search, sortMode]);
 
   const totals = visibleProducts.reduce(
     (acc, p) => {
@@ -947,12 +966,21 @@ function StockView({
         </div>
       </div>
 
-      <div className="mb-4">
+      <div className="mb-4 grid gap-3 md:grid-cols-[1fr_240px]">
         <Input
           placeholder="Pretraži lager po nazivu, kategoriji ili pakovanju..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+
+        <Select
+          value={sortMode}
+          onChange={(e) => setSortMode(e.target.value as "az" | "most" | "least")}
+        >
+          <option value="az">Abecedno A-Z</option>
+          <option value="most">Čega najviše ima</option>
+          <option value="least">Čega najmanje ima</option>
+        </Select>
       </div>
 
       <div className="overflow-auto rounded-xl border">
