@@ -437,6 +437,28 @@ function Dashboard({ products, stockMap, todayStats, stockTotals }: any) {
     return Number(stockMap[`${p.id}_storage`] ?? 0) <= Number(p.min_storage_stock);
   }).length;
 
+  const urgentBarItems = activeProducts
+    .map((p: Product) => {
+      const barQty = Number(stockMap[`${p.id}_bar`] ?? 0);
+      const coffeePerKg = Number(p.coffee_per_kg ?? 0);
+      const isCoffee = coffeePerKg > 0;
+      const displayQty = isCoffee ? barQty * coffeePerKg : barQty;
+      const alertLimit = isCoffee ? coffeePerKg : 10;
+
+      return {
+        product: p,
+        isCoffee,
+        barQty,
+        displayQty,
+        alertLimit,
+        label: isCoffee
+          ? `${barQty.toFixed(2)} kg / ${displayQty.toFixed(0)} kafa`
+          : `${displayQty.toFixed(2)} ${p.unit || "kom"}`
+      };
+    })
+    .filter((item: any) => item.displayQty <= item.alertLimit)
+    .sort((a: any, b: any) => a.displayQty - b.displayQty);
+
   return (
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-4">
@@ -453,6 +475,48 @@ function Dashboard({ products, stockMap, todayStats, stockTotals }: any) {
           value={money(todayStats.profit)}
         />
       </div>
+
+      {urgentBarItems.length > 0 && (
+        <Card>
+          <div className="mb-3 flex flex-col justify-between gap-2 md:flex-row md:items-center">
+            <div>
+              <h2 className="text-xl font-black text-red-800">
+                Napomena: šank lager pri kraju
+              </h2>
+              <p className="text-sm text-black/60">
+                Pića se prikazuju kada padnu ispod 10 komada. Kafa se prikazuje
+                kada padne na 1 kg ili manje, odnosno 125 kafa/doza ili manje.
+              </p>
+            </div>
+            <span className="rounded-full bg-red-100 px-4 py-2 text-sm font-black text-red-800">
+              {urgentBarItems.length} artikala
+            </span>
+          </div>
+
+          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+            {urgentBarItems.map((item: any) => (
+              <div
+                key={item.product.id}
+                className="rounded-2xl border border-red-100 bg-red-50 p-3"
+              >
+                <p className="font-black text-red-900">{item.product.name}</p>
+                <p className="text-sm text-red-800">
+                  Ostalo: <b>{item.label}</b>
+                  {item.isCoffee && (
+                    <span className="ml-1 text-xs text-red-700">
+                      / limit 1 kg
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-black/50">
+                  {item.product.category || "Bez kategorije"}{" "}
+                  {item.product.package_size ? `• ${item.product.package_size}` : ""}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <ValueCard
