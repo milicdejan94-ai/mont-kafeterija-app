@@ -963,6 +963,7 @@ function StockView({
               <th>Kategorija</th>
               <th>Pakovanje</th>
               <th>Stanje</th>
+              {location === "bar" && <th>Doza kafe ostalo</th>}
               <th>Vrijednost nabavna</th>
               <th>Vrijednost prodajna</th>
             </tr>
@@ -980,6 +981,17 @@ function StockView({
                   <td className="font-black">
                     {q.toFixed(2)} {p.unit}
                   </td>
+                  {location === "bar" && (
+                    <td>
+                      {Number(p.coffee_per_kg ?? 0) > 0 ? (
+                        <span className="font-black text-mont-dark">
+                          {(q * Number(p.coffee_per_kg ?? 0)).toFixed(0)} kafa
+                        </span>
+                      ) : (
+                        <span className="text-black/30">-</span>
+                      )}
+                    </td>
+                  )}
                   <td>{money(stockPurchaseValue(p, q))}</td>
                   <td>{money(stockSaleValue(p, q))}</td>
                 </tr>
