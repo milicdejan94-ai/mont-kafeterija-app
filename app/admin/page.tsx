@@ -88,8 +88,15 @@ function productMatchesSearch(product: Product, search: string) {
   );
 }
 
+function purchasePriceWithVat(product: any) {
+  const purchasePrice = Number(product?.purchase_price ?? 0);
+  const vatRate = Number(product?.vat_rate ?? 0);
+
+  return purchasePrice * (1 + vatRate / 100);
+}
+
 function stockPurchaseValue(product: Product, quantity: number) {
-  return quantity * Number(product.purchase_price ?? 0);
+  return quantity * purchasePriceWithVat(product);
 }
 
 function stockSaleValue(product: Product, quantity: number) {
@@ -101,7 +108,7 @@ function stockSaleValue(product: Product, quantity: number) {
 }
 
 function receiptItemPurchaseValue(item: any) {
-  return Number(item.quantity ?? 0) * Number(item.products?.purchase_price ?? 0);
+  return Number(item.quantity ?? 0) * purchasePriceWithVat(item.products);
 }
 
 function calculateConsumptionItemValues(item: any) {
@@ -115,9 +122,9 @@ function calculateConsumptionItemValues(item: any) {
   if (product?.coffee_per_kg) {
     purchase =
       (quantity / Number(product.coffee_per_kg)) *
-      Number(product?.purchase_price ?? 0);
+      purchasePriceWithVat(product);
   } else {
-    purchase = quantity * Number(product?.purchase_price ?? 0);
+    purchase = quantity * purchasePriceWithVat(product);
   }
 
   return {
@@ -568,7 +575,7 @@ function ValueCard({ title, purchase, sale }: { title: string; purchase: number;
       <p className="text-sm font-semibold text-black/60">{title}</p>
       <div className="mt-3 grid gap-2">
         <div className="flex justify-between rounded-xl bg-black/5 p-3">
-          <span>Nabavna vrijednost</span>
+          <span>Nabavna vrijednost sa PDV</span>
           <b>{money(purchase)}</b>
         </div>
         <div className="flex justify-between rounded-xl bg-black/5 p-3">
@@ -796,16 +803,19 @@ function Products({
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Nabavna cijena">
+            <Field label="Nabavna cijena bez PDV-a">
               <Input
                 type="number"
                 step="0.01"
-                placeholder="KM"
+                placeholder="KM bez PDV-a"
                 value={form.purchase_price ?? ""}
                 onChange={(e) =>
                   setForm({ ...form, purchase_price: e.target.value })
                 }
               />
+              <p className="mt-1 text-xs text-black/50">
+                Unesi cijenu bez PDV-a. Aplikacija sama računa cijenu sa PDV-om.
+              </p>
             </Field>
 
             <Field label="Prodajna cijena">
@@ -869,6 +879,34 @@ function Products({
             />
           </Field>
 
+          <div className="rounded-2xl bg-black/5 p-4 text-sm">
+            <p className="font-black">Pregled nabavne cijene</p>
+            <div className="mt-2 grid gap-2 md:grid-cols-3">
+              <div className="rounded-xl bg-white p-3">
+                <p className="text-xs text-black/50">Bez PDV-a</p>
+                <b>{money(Number(form.purchase_price || 0))}</b>
+              </div>
+              <div className="rounded-xl bg-white p-3">
+                <p className="text-xs text-black/50">PDV {Number(form.vat_rate || 0).toFixed(2)}%</p>
+                <b>
+                  {money(
+                    Number(form.purchase_price || 0) *
+                      (Number(form.vat_rate || 0) / 100)
+                  )}
+                </b>
+              </div>
+              <div className="rounded-xl bg-mont-gold/20 p-3">
+                <p className="text-xs text-black/50">Sa PDV-om</p>
+                <b>
+                  {money(
+                    Number(form.purchase_price || 0) *
+                      (1 + Number(form.vat_rate || 0) / 100)
+                  )}
+                </b>
+              </div>
+            </div>
+          </div>
+
           <div className="flex flex-wrap gap-2">
             <Button>Sačuvaj</Button>
 
@@ -916,7 +954,9 @@ function Products({
                 <th className="p-3">Naziv</th>
                 <th>Kategorija</th>
                 <th>Pak.</th>
-                <th>Nab.</th>
+                <th>Nab. bez PDV</th>
+                <th>PDV</th>
+                <th>Nab. sa PDV</th>
                 <th>Prod.</th>
                 <th className="p-3">Akcije</th>
               </tr>
@@ -936,6 +976,8 @@ function Products({
                   <td>{p.category}</td>
                   <td>{p.package_size}</td>
                   <td>{money(p.purchase_price)}</td>
+                  <td>{Number(p.vat_rate ?? 0).toFixed(2)}%</td>
+                  <td className="font-black">{money(purchasePriceWithVat(p))}</td>
                   <td>{money(p.sale_price)}</td>
                   <td className="space-x-2 p-2">
                     <button
@@ -1069,7 +1111,7 @@ function StockView({
               <th>Pakovanje</th>
               <th>Stanje</th>
               {location === "bar" && <th>Doza kafe ostalo</th>}
-              <th>Vrijednost nabavna</th>
+              <th>Vrijednost nabavna sa PDV</th>
               <th>Vrijednost prodajna</th>
             </tr>
           </thead>
