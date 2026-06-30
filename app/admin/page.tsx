@@ -426,6 +426,7 @@ export default function AdminPage() {
 
 function Dashboard({ products, stockMap, todayStats, stockTotals }: any) {
   const activeProducts = products.filter((p: Product) => p.active);
+  const [showUrgentBarItems, setShowUrgentBarItems] = useState(false);
 
   const lowBar = activeProducts.filter((p: Product) => {
     if (p.min_bar_stock === null || p.min_bar_stock === undefined) return false;
@@ -478,43 +479,55 @@ function Dashboard({ products, stockMap, todayStats, stockTotals }: any) {
 
       {urgentBarItems.length > 0 && (
         <Card>
-          <div className="mb-3 flex flex-col justify-between gap-2 md:flex-row md:items-center">
+          <button
+            type="button"
+            onClick={() => setShowUrgentBarItems(!showUrgentBarItems)}
+            className="flex w-full flex-col justify-between gap-2 text-left md:flex-row md:items-center"
+          >
             <div>
               <h2 className="text-xl font-black text-red-800">
                 Napomena: šank lager pri kraju
               </h2>
               <p className="text-sm text-black/60">
-                Pića se prikazuju kada padnu ispod 10 komada. Kafa se prikazuje
-                kada padne na 1 kg ili manje, odnosno 125 kafa/doza ili manje.
+                Klikni za prikaz/sakrivanje. Pića ispod 10 komada, kafa na 1 kg
+                ili manje.
               </p>
             </div>
-            <span className="rounded-full bg-red-100 px-4 py-2 text-sm font-black text-red-800">
-              {urgentBarItems.length} artikala
-            </span>
-          </div>
 
-          <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
-            {urgentBarItems.map((item: any) => (
-              <div
-                key={item.product.id}
-                className="rounded-2xl border border-red-100 bg-red-50 p-3"
-              >
-                <p className="font-black text-red-900">{item.product.name}</p>
-                <p className="text-sm text-red-800">
-                  Ostalo: <b>{item.label}</b>
-                  {item.isCoffee && (
-                    <span className="ml-1 text-xs text-red-700">
-                      / limit 1 kg
-                    </span>
-                  )}
-                </p>
-                <p className="text-xs text-black/50">
-                  {item.product.category || "Bez kategorije"}{" "}
-                  {item.product.package_size ? `• ${item.product.package_size}` : ""}
-                </p>
-              </div>
-            ))}
-          </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-red-100 px-4 py-2 text-sm font-black text-red-800">
+                {urgentBarItems.length} artikala
+              </span>
+              <span className="rounded-full bg-black/5 px-3 py-2 text-sm font-black">
+                {showUrgentBarItems ? "Sakrij" : "Prikaži"}
+              </span>
+            </div>
+          </button>
+
+          {showUrgentBarItems && (
+            <div className="mt-4 grid gap-2 md:grid-cols-2 lg:grid-cols-3">
+              {urgentBarItems.map((item: any) => (
+                <div
+                  key={item.product.id}
+                  className="rounded-2xl border border-red-100 bg-red-50 p-3"
+                >
+                  <p className="font-black text-red-900">{item.product.name}</p>
+                  <p className="text-sm text-red-800">
+                    Ostalo: <b>{item.label}</b>
+                    {item.isCoffee && (
+                      <span className="ml-1 text-xs text-red-700">
+                        / limit 1 kg
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-black/50">
+                    {item.product.category || "Bez kategorije"}{" "}
+                    {item.product.package_size ? `• ${item.product.package_size}` : ""}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
       )}
 
