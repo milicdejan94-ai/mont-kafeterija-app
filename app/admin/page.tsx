@@ -1300,6 +1300,51 @@ function ReceiptForm({ products, suppliers, receipts = [], refresh, setMessage }
     refresh();
   }
 
+  async function cancelReceiptItem(item: any, receipt: any) {
+    if ((receipt.status || "active") === "cancelled") {
+      setMessage("Cijeli prijem robe je već poništen.");
+      return;
+    }
+
+    if ((item.status || "active") === "cancelled") {
+      setMessage("Ova stavka je već poništena.");
+      return;
+    }
+
+    const productName = item.products?.name || "Nepoznat artikal";
+
+    const reason = window.prompt(
+      "Unesi razlog poništavanja stavke:",
+      `Pogrešan unos stavke - ${productName}`
+    );
+
+    if (!reason?.trim()) return;
+
+    const ok = window.confirm(
+      `Poništiti samo ovu stavku?\n\nArtikal: ${productName}\nKoličina: ${Number(
+        item.quantity ?? 0
+      ).toFixed(2)} ${item.products?.unit || ""}\n\nSamo ova stavka će biti oduzeta iz lagera. Ostale stavke iz prijema ostaju aktivne.`
+    );
+
+    if (!ok) return;
+
+    const { data: user } = await supabase.auth.getUser();
+
+    const { error } = await supabase.rpc("cancel_stock_receipt_item", {
+      p_item_id: item.id,
+      p_cancelled_by: user.user?.id ?? null,
+      p_cancel_reason: reason.trim()
+    });
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage("Stavka prijema robe je poništena i lager je umanjen za tu stavku.");
+    refresh();
+  }
+
   return (
     <div className="space-y-6">
       <Card>
@@ -1438,10 +1483,12 @@ function ReceiptForm({ products, suppliers, receipts = [], refresh, setMessage }
           ) : (
             filteredReceipts.map((receipt: any) => {
               const isCancelled = (receipt.status || "active") === "cancelled";
-              const total = receipt.stock_receipt_items?.reduce(
-                (sum: number, it: any) => sum + receiptItemPurchaseValue(it),
-                0
-              );
+              const total = receipt.stock_receipt_items
+                ?.filter((it: any) => (it.status || "active") !== "cancelled")
+                .reduce(
+                  (sum: number, it: any) => sum + receiptItemPurchaseValue(it),
+                  0
+                );
 
               return (
                 <div
@@ -1502,20 +1549,67 @@ function ReceiptForm({ products, suppliers, receipts = [], refresh, setMessage }
                         <tr>
                           <th className="p-2">Artikal</th>
                           <th>Količina</th>
+                          <th>Status</th>
                           <th>Vrijednost</th>
+                          <th>Akcije</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {receipt.stock_receipt_items?.map((it: any) => (
-                          <tr key={it.id} className="border-t">
-                            <td className="p-2 font-semibold">{it.products?.name}</td>
-                            <td>
-                              {Number(it.quantity ?? 0).toFixed(2)}{" "}
-                              {it.products?.unit || ""}
-                            </td>
-                            <td>{money(receiptItemPurchaseValue(it))}</td>
-                          </tr>
-                        ))}
+                        {receipt.stock_receipt_items?.map((it: any) => {
+                          const itemCancelled =
+                            (it.status || "active") === "cancelled";
+
+                          return (
+                            <tr
+                              key={it.id}
+                              className={`border-t ${itemCancelled ? "bg-red-50 text-black/50" : ""}`}
+                            >
+                              <td className="p-2 font-semibold">
+                                {it.products?.name}
+                                {itemCancelled && (
+                                  <p className="text-xs text-red-700">
+                                    Razlog: {it.cancel_reason || "-"}
+                                  </p>
+                                )}
+                              </td>
+                              <td>
+                                {Number(it.quantity ?? 0).toFixed(2)}{" "}
+                                {it.products?.unit || ""}
+                              </td>
+                              <td>
+                                {itemCancelled ? (
+                                  <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-black text-red-800">
+                                    Poništena
+                                  </span>
+                                ) : (
+                                  <span className="rounded-full bg-green-50 px-2 py-1 text-xs font-black text-green-800">
+                                    Aktivna
+                                  </span>
+                                )}
+                              </td>
+                              <td>
+                                {itemCancelled ? (
+                                  <span className="line-through">
+                                    {money(receiptItemPurchaseValue(it))}
+                                  </span>
+                                ) : (
+                                  money(receiptItemPurchaseValue(it))
+                                )}
+                              </td>
+                              <td>
+                                {!isCancelled && !itemCancelled && (
+                                  <button
+                                    type="button"
+                                    onClick={() => cancelReceiptItem(it, receipt)}
+                                    className="rounded-lg bg-red-50 px-2 py-1 text-xs font-black text-red-700 hover:bg-red-100"
+                                  >
+                                    Poništi stavku
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -3367,9 +3461,11 @@ function Reports({ reports, receipts, expenses = [] }: any) {
     });
 
     dateFilteredReceipts.forEach((r: any) => {
-      r.stock_receipt_items?.forEach((it: any) => {
-        receivedPurchase += receiptItemPurchaseValue(it);
-      });
+      r.stock_receipt_items
+        ?.filter((it: any) => (it.status || "active") !== "cancelled")
+        .forEach((it: any) => {
+          receivedPurchase += receiptItemPurchaseValue(it);
+        });
     });
 
     dateFilteredExpenses.forEach((e: any) => {
@@ -3859,7 +3955,9 @@ function Reports({ reports, receipts, expenses = [] }: any) {
                 </p>
 
                 <ul className="mt-2 text-sm">
-                  {r.stock_receipt_items?.map((it: any) => (
+                  {r.stock_receipt_items
+                    ?.filter((it: any) => (it.status || "active") !== "cancelled")
+                    .map((it: any) => (
                     <li key={it.id}>
                       {it.products?.name}: {" "}
                       <b>{Number(it.quantity).toFixed(2)}</b> — {" "}
