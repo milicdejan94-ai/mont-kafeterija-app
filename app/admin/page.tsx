@@ -23,6 +23,7 @@ type Tab =
   | "receipt"
   | "storage"
   | "adjustments"
+  | "expenses"
   | "daily"
   | "locked"
   | "reports"
@@ -54,6 +55,17 @@ type StockAdjustment = {
   user_id: string | null;
   created_at: string;
   products?: Product;
+};
+
+type OperatingExpense = {
+  id: string;
+  date: string;
+  category: string;
+  description: string | null;
+  amount: number;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
 };
 
 const categoryOptions = [
@@ -161,6 +173,7 @@ export default function AdminPage() {
   const [receipts, setReceipts] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [adjustments, setAdjustments] = useState<StockAdjustment[]>([]);
+  const [expenses, setExpenses] = useState<OperatingExpense[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [message, setMessage] = useState("");
 
@@ -195,7 +208,8 @@ export default function AdminPage() {
       { data: cr },
       { data: sr },
       { data: sp },
-      { data: adj }
+      { data: adj },
+      { data: exp }
     ] = await Promise.all([
       supabase.from("products").select("*").order("name"),
       supabase.from("stock_levels").select("*, products(*)").order("location"),
@@ -214,7 +228,12 @@ export default function AdminPage() {
         .from("stock_adjustments")
         .select("*, products(*)")
         .order("created_at", { ascending: false })
-        .limit(200)
+        .limit(200),
+      supabase
+        .from("operating_expenses")
+        .select("*")
+        .order("date", { ascending: false })
+        .limit(500)
     ]);
 
     setProducts(sortProductsAZ((p ?? []) as Product[]));
@@ -223,6 +242,7 @@ export default function AdminPage() {
     setReceipts(sr ?? []);
     setSuppliers((sp ?? []) as Supplier[]);
     setAdjustments((adj ?? []) as StockAdjustment[]);
+    setExpenses((exp ?? []) as OperatingExpense[]);
   }
 
   async function logout() {
@@ -307,6 +327,7 @@ export default function AdminPage() {
     ["storage", "Magacin"],
     ["receipt", "Prijem robe"],
     ["adjustments", "Korekcije"],
+    ["expenses", "Troškovi"],
     ["daily", "Dnevni zaključak"],
     ["locked", "Zaključane smjene"],
     ["suppliers", "Komitenti"],
@@ -408,6 +429,14 @@ export default function AdminPage() {
           />
         )}
 
+        {tab === "expenses" && (
+          <ExpensesView
+            expenses={expenses}
+            refresh={refreshAll}
+            setMessage={setMessage}
+          />
+        )}
+
         {tab === "daily" && <DailySummaryView reports={activeReports} />}
 
         {tab === "locked" && (
@@ -424,7 +453,12 @@ export default function AdminPage() {
         )}
 
         {tab === "reports" && (
-          <Reports reports={activeReports} receipts={receipts} productById={productById} />
+          <Reports
+            reports={activeReports}
+            receipts={receipts}
+            expenses={expenses}
+            productById={productById}
+          />
         )}
       </div>
     </main>
@@ -2821,7 +2855,303 @@ function SuppliersView({ suppliers, receipts, refresh, setMessage }: any) {
   );
 }
 
-function Reports({ reports, receipts }: any) {
+
+const expenseCategories = [
+  "Plate",
+  "Doprinosi",
+  "Kirija",
+  "Struja",
+  "Voda",
+  "Internet",
+  "Knjigovodstvo",
+  "Održavanje",
+  "Nabavka / sitni inventar",
+  "Ostalo"
+];
+
+function ExpensesView({ expenses, refresh, setMessage }: any) {
+  const [form, setForm] = useState({
+    date: getTodayDate(),
+    category: "Plate",
+    description: "",
+    amount: "",
+    note: ""
+  });
+  const [fromDate, setFromDate] = useState(getMonthStart());
+  const [toDate, setToDate] = useState(getTodayDate());
+  const [search, setSearch] = useState("");
+
+  const filteredExpenses = useMemo(() => {
+    const q = normalizeText(search);
+
+    return expenses
+      .filter((e: OperatingExpense) => isDateInRange(e.date, fromDate, toDate))
+      .filter((e: OperatingExpense) => {
+        if (!q) return true;
+
+        return (
+          normalizeText(e.date).includes(q) ||
+          normalizeText(e.category).includes(q) ||
+          normalizeText(e.description).includes(q) ||
+          normalizeText(e.note).includes(q)
+        );
+      });
+  }, [expenses, fromDate, toDate, search]);
+
+  const totals = useMemo(() => {
+    const byCategory: Record<string, number> = {};
+    let total = 0;
+
+    filteredExpenses.forEach((e: OperatingExpense) => {
+      const amount = Number(e.amount ?? 0);
+      total += amount;
+      byCategory[e.category] = (byCategory[e.category] ?? 0) + amount;
+    });
+
+    return {
+      total,
+      byCategory: Object.entries(byCategory)
+        .map(([category, amount]) => ({ category, amount }))
+        .sort((a, b) => b.amount - a.amount)
+    };
+  }, [filteredExpenses]);
+
+  async function saveExpense(e: FormEvent) {
+    e.preventDefault();
+
+    if (!form.category || Number(form.amount) <= 0) {
+      setMessage("Unesi kategoriju i iznos troška.");
+      return;
+    }
+
+    const { data: user } = await supabase.auth.getUser();
+
+    const { error } = await supabase.from("operating_expenses").insert({
+      date: form.date,
+      category: form.category,
+      description: form.description || null,
+      amount: Number(form.amount),
+      note: form.note || null,
+      created_by: user.user?.id ?? null
+    });
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage("Trošak je sačuvan.");
+    setForm({
+      date: getTodayDate(),
+      category: "Plate",
+      description: "",
+      amount: "",
+      note: ""
+    });
+    refresh();
+  }
+
+  async function deleteExpense(expense: OperatingExpense) {
+    const ok = window.confirm(
+      `Obrisati trošak?\n\n${expense.date} - ${expense.category} - ${money(expense.amount)}`
+    );
+
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from("operating_expenses")
+      .delete()
+      .eq("id", expense.id);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage("Trošak je obrisan.");
+    refresh();
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <h2 className="mb-4 text-xl font-black">Unos troškova</h2>
+
+        <form onSubmit={saveExpense} className="grid gap-3 md:grid-cols-5">
+          <Field label="Datum">
+            <Input
+              type="date"
+              value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+            />
+          </Field>
+
+          <Field label="Kategorija">
+            <Select
+              value={form.category}
+              onChange={(e) => setForm({ ...form, category: e.target.value })}
+            >
+              {expenseCategories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field label="Opis">
+            <Input
+              placeholder="npr. plata šankera, struja..."
+              value={form.description}
+              onChange={(e) =>
+                setForm({ ...form, description: e.target.value })
+              }
+            />
+          </Field>
+
+          <Field label="Iznos KM">
+            <Input
+              type="number"
+              step="0.01"
+              placeholder="0.00"
+              value={form.amount}
+              onChange={(e) => setForm({ ...form, amount: e.target.value })}
+            />
+          </Field>
+
+          <div className="flex items-end">
+            <Button className="w-full">Sačuvaj</Button>
+          </div>
+
+          <div className="md:col-span-5">
+            <Field label="Napomena">
+              <Textarea
+                placeholder="Dodatna napomena, ako treba"
+                value={form.note}
+                onChange={(e) => setForm({ ...form, note: e.target.value })}
+              />
+            </Field>
+          </div>
+        </form>
+      </Card>
+
+      <Card>
+        <div className="mb-4 grid gap-3 md:grid-cols-[180px_180px_1fr_auto] md:items-end">
+          <Field label="Od datuma">
+            <Input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Do datuma">
+            <Input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Pretraga">
+            <Input
+              placeholder="Pretraži troškove..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </Field>
+
+          <SecondaryButton
+            type="button"
+            onClick={() => {
+              setFromDate(getMonthStart());
+              setToDate(getTodayDate());
+              setSearch("");
+            }}
+          >
+            Reset
+          </SecondaryButton>
+        </div>
+
+        <div className="mb-4 grid gap-4 md:grid-cols-3">
+          <Stat
+            icon={<Trash2 />}
+            label="Ukupno troškova"
+            value={money(totals.total)}
+          />
+          <Stat
+            icon={<ClipboardList />}
+            label="Broj stavki"
+            value={filteredExpenses.length}
+          />
+          <Stat
+            icon={<BarChart3 />}
+            label="Prosjek po stavci"
+            value={money(filteredExpenses.length ? totals.total / filteredExpenses.length : 0)}
+          />
+        </div>
+
+        {totals.byCategory.length > 0 && (
+          <CollapsibleSection title="Troškovi po kategorijama" defaultOpen={true}>
+            <div className="grid gap-2 md:grid-cols-3">
+              {totals.byCategory.map((item) => (
+                <div key={item.category} className="rounded-2xl bg-black/5 p-3">
+                  <p className="text-sm text-black/60">{item.category}</p>
+                  <b>{money(item.amount)}</b>
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
+        )}
+
+        <CollapsibleSection title="Lista troškova" defaultOpen={true}>
+          {filteredExpenses.length === 0 ? (
+            <p className="text-sm text-black/60">Nema troškova za izabrani period.</p>
+          ) : (
+            <div className="overflow-auto rounded-xl border">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-black/5">
+                  <tr>
+                    <th className="p-3">Datum</th>
+                    <th>Kategorija</th>
+                    <th>Opis</th>
+                    <th>Napomena</th>
+                    <th>Iznos</th>
+                    <th>Akcije</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {filteredExpenses.map((expense: OperatingExpense) => (
+                    <tr key={expense.id} className="border-t">
+                      <td className="p-3">{expense.date}</td>
+                      <td className="font-semibold">{expense.category}</td>
+                      <td>{expense.description || "-"}</td>
+                      <td>{expense.note || "-"}</td>
+                      <td className="font-black">{money(expense.amount)}</td>
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => deleteExpense(expense)}
+                          className="rounded-lg p-2 text-red-700 hover:bg-red-50"
+                          title="Obriši trošak"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CollapsibleSection>
+      </Card>
+    </div>
+  );
+}
+
+function Reports({ reports, receipts, expenses = [] }: any) {
   const [search, setSearch] = useState("");
   const [fromDate, setFromDate] = useState(getMonthStart());
   const [toDate, setToDate] = useState(getTodayDate());
@@ -2834,10 +3164,15 @@ function Reports({ reports, receipts }: any) {
     return receipts.filter((r: any) => isDateInRange(r.date, fromDate, toDate));
   }, [receipts, fromDate, toDate]);
 
+  const dateFilteredExpenses = useMemo(() => {
+    return expenses.filter((e: any) => isDateInRange(e.date, fromDate, toDate));
+  }, [expenses, fromDate, toDate]);
+
   const periodTotals = useMemo(() => {
     let sale = 0;
     let purchase = 0;
     let receivedPurchase = 0;
+    let operatingExpenses = 0;
 
     dateFilteredReports.forEach((r: any) => {
       r.consumption_items?.forEach((it: any) => {
@@ -2853,13 +3188,19 @@ function Reports({ reports, receipts }: any) {
       });
     });
 
+    dateFilteredExpenses.forEach((e: any) => {
+      operatingExpenses += Number(e.amount ?? 0);
+    });
+
     return {
       sale,
       purchase,
       profit: sale - purchase,
-      receivedPurchase
+      receivedPurchase,
+      operatingExpenses,
+      finalProfit: sale - purchase - operatingExpenses
     };
-  }, [dateFilteredReports, dateFilteredReceipts]);
+  }, [dateFilteredReports, dateFilteredReceipts, dateFilteredExpenses]);
 
   const bartenderStats = useMemo(() => {
     const map: Record<
@@ -3076,7 +3417,7 @@ function Reports({ reports, receipts }: any) {
       </Card>
 
       <CollapsibleSection title="Sažetak perioda" defaultOpen={true}>
-        <div className="grid gap-4 md:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-6">
           <Stat
             icon={<BarChart3 />}
             label="Promet za period"
@@ -3097,7 +3438,48 @@ function Reports({ reports, receipts }: any) {
             label="Nabavljeno robe"
             value={money(periodTotals.receivedPurchase)}
           />
+          <Stat
+            icon={<Trash2 />}
+            label="Troškovi perioda"
+            value={money(periodTotals.operatingExpenses)}
+          />
+          <Stat
+            icon={<ClipboardList />}
+            label="Zarada poslije troškova"
+            value={money(periodTotals.finalProfit)}
+          />
         </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Troškovi u periodu" defaultOpen={false}>
+        {dateFilteredExpenses.length === 0 ? (
+          <p className="text-sm text-black/60">Nema unesenih troškova za izabrani period.</p>
+        ) : (
+          <div className="overflow-auto rounded-xl border">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-black/5">
+                <tr>
+                  <th className="p-3">Datum</th>
+                  <th>Kategorija</th>
+                  <th>Opis</th>
+                  <th>Napomena</th>
+                  <th>Iznos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dateFilteredExpenses.map((e: any) => (
+                  <tr key={e.id} className="border-t">
+                    <td className="p-3">{e.date}</td>
+                    <td className="font-semibold">{e.category}</td>
+                    <td>{e.description || "-"}</td>
+                    <td>{e.note || "-"}</td>
+                    <td className="font-black">{money(e.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </CollapsibleSection>
 
       <CollapsibleSection title="Šankeri" defaultOpen={true}>
