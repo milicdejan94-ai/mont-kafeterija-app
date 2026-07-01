@@ -414,6 +414,7 @@ export default function AdminPage() {
           <ReceiptForm
             products={products}
             suppliers={suppliers}
+            receipts={receipts}
             refresh={refreshAll}
             setMessage={setMessage}
           />
@@ -1185,7 +1186,7 @@ function StockView({
   );
 }
 
-function ReceiptForm({ products, suppliers, refresh, setMessage }: any) {
+function ReceiptForm({ products, suppliers, receipts = [], refresh, setMessage }: any) {
   const [location, setLocation] = useState<LocationType>("bar");
   const [supplier, setSupplier] = useState("");
   const [doc, setDoc] = useState("");
@@ -1194,6 +1195,8 @@ function ReceiptForm({ products, suppliers, refresh, setMessage }: any) {
   const [items, setItems] = useState<ReceiptItem[]>([
     { product_id: "", quantity: "" }
   ]);
+  const [receiptSearch, setReceiptSearch] = useState("");
+  const [showCancelledReceipts, setShowCancelledReceipts] = useState(false);
 
   const filteredProducts = sortProductsAZ(
     products
@@ -1241,8 +1244,65 @@ function ReceiptForm({ products, suppliers, refresh, setMessage }: any) {
     refresh();
   }
 
+  const filteredReceipts = receipts
+    .filter((r: any) => showCancelledReceipts || (r.status || "active") !== "cancelled")
+    .filter((r: any) => {
+      const q = normalizeText(receiptSearch);
+      if (!q) return true;
+
+      return (
+        normalizeText(r.date).includes(q) ||
+        normalizeText(r.supplier).includes(q) ||
+        normalizeText(r.document_number).includes(q) ||
+        normalizeText(r.note).includes(q) ||
+        r.stock_receipt_items?.some((it: any) =>
+          normalizeText(it.products?.name).includes(q)
+        )
+      );
+    })
+    .slice(0, 100);
+
+  async function cancelReceipt(receipt: any) {
+    if ((receipt.status || "active") === "cancelled") {
+      setMessage("Ovaj prijem robe je već poništen.");
+      return;
+    }
+
+    const reason = window.prompt(
+      "Unesi razlog poništavanja prijema robe:",
+      "Pogrešan unos prijema robe"
+    );
+
+    if (!reason?.trim()) return;
+
+    const ok = window.confirm(
+      `Poništiti prijem robe?\n\nDatum: ${receipt.date}\nKomitent: ${
+        receipt.supplier || "-"
+      }\nDokument: ${receipt.document_number || "-"}\n\nKoličine iz ovog prijema će biti oduzete iz lagera.`
+    );
+
+    if (!ok) return;
+
+    const { data: user } = await supabase.auth.getUser();
+
+    const { error } = await supabase.rpc("cancel_stock_receipt", {
+      p_receipt_id: receipt.id,
+      p_cancelled_by: user.user?.id ?? null,
+      p_cancel_reason: reason.trim()
+    });
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage("Prijem robe je poništen i lager je umanjen.");
+    refresh();
+  }
+
   return (
-    <Card>
+    <div className="space-y-6">
+      <Card>
       <h2 className="mb-4 text-xl font-black">Prijem robe</h2>
 
       <form onSubmit={submit} className="space-y-4">
@@ -1344,6 +1404,128 @@ function ReceiptForm({ products, suppliers, refresh, setMessage }: any) {
         <Button>Sačuvaj prijem</Button>
       </form>
     </Card>
+
+      <Card>
+        <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-center">
+          <div>
+            <h2 className="text-xl font-black">Pregled prijema robe</h2>
+            <p className="text-sm text-black/60">
+              Ovdje možeš poništiti pogrešan prijem robe. Poništeni dokument ne ulazi u Nabavljeno robe.
+            </p>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm font-semibold text-black/70">
+            <input
+              type="checkbox"
+              checked={showCancelledReceipts}
+              onChange={(e) => setShowCancelledReceipts(e.target.checked)}
+            />
+            Prikaži poništene
+          </label>
+        </div>
+
+        <div className="mb-4">
+          <Input
+            placeholder="Pretraži prijem robe po datumu, artiklu, komitentu ili dokumentu..."
+            value={receiptSearch}
+            onChange={(e) => setReceiptSearch(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-3">
+          {filteredReceipts.length === 0 ? (
+            <p className="text-sm text-black/60">Nema prijema robe za prikaz.</p>
+          ) : (
+            filteredReceipts.map((receipt: any) => {
+              const isCancelled = (receipt.status || "active") === "cancelled";
+              const total = receipt.stock_receipt_items?.reduce(
+                (sum: number, it: any) => sum + receiptItemPurchaseValue(it),
+                0
+              );
+
+              return (
+                <div
+                  key={receipt.id}
+                  className={`rounded-2xl border p-4 ${
+                    isCancelled ? "border-red-100 bg-red-50" : "bg-white"
+                  }`}
+                >
+                  <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <b>{receipt.date}</b>
+                        <span className="rounded-full bg-black/5 px-2 py-1 text-xs font-semibold">
+                          {receipt.location === "bar" ? "Šank" : "Magacin"}
+                        </span>
+                        {isCancelled && (
+                          <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-black text-red-800">
+                            Poništeno
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="mt-1 text-sm text-black/60">
+                        Komitent: <b>{receipt.supplier || "-"}</b> • Dokument:{" "}
+                        <b>{receipt.document_number || "-"}</b>
+                      </p>
+
+                      {receipt.note && (
+                        <p className="mt-1 text-sm text-black/60">{receipt.note}</p>
+                      )}
+
+                      {isCancelled && (
+                        <p className="mt-1 text-sm text-red-800">
+                          Razlog poništavanja: <b>{receipt.cancel_reason || "-"}</b>
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="text-right">
+                      <p className="text-xs text-black/50">Vrijednost</p>
+                      <p className="text-lg font-black">{money(total ?? 0)}</p>
+
+                      {!isCancelled && (
+                        <button
+                          type="button"
+                          onClick={() => cancelReceipt(receipt)}
+                          className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100"
+                        >
+                          Poništi prijem
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 overflow-auto rounded-xl border">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-black/5">
+                        <tr>
+                          <th className="p-2">Artikal</th>
+                          <th>Količina</th>
+                          <th>Vrijednost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {receipt.stock_receipt_items?.map((it: any) => (
+                          <tr key={it.id} className="border-t">
+                            <td className="p-2 font-semibold">{it.products?.name}</td>
+                            <td>
+                              {Number(it.quantity ?? 0).toFixed(2)}{" "}
+                              {it.products?.unit || ""}
+                            </td>
+                            <td>{money(receiptItemPurchaseValue(it))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </Card>
+    </div>
   );
 }
 
@@ -3161,7 +3343,9 @@ function Reports({ reports, receipts, expenses = [] }: any) {
   }, [reports, fromDate, toDate]);
 
   const dateFilteredReceipts = useMemo(() => {
-    return receipts.filter((r: any) => isDateInRange(r.date, fromDate, toDate));
+    return receipts
+      .filter((r: any) => (r.status || "active") !== "cancelled")
+      .filter((r: any) => isDateInRange(r.date, fromDate, toDate));
   }, [receipts, fromDate, toDate]);
 
   const dateFilteredExpenses = useMemo(() => {
