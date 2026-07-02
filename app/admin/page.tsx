@@ -157,6 +157,57 @@ function getTodayDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function parseLocalDate(dateString: string) {
+  const [year, month, day] = dateString.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function formatLocalDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function addDaysToDate(dateString: string, days: number) {
+  const date = parseLocalDate(dateString);
+  date.setDate(date.getDate() + days);
+  return formatLocalDate(date);
+}
+
+function monthStartFromDate(dateString: string) {
+  const date = parseLocalDate(dateString);
+  return formatLocalDate(new Date(date.getFullYear(), date.getMonth(), 1));
+}
+
+function monthEndFromDate(dateString: string) {
+  const date = parseLocalDate(dateString);
+  return formatLocalDate(new Date(date.getFullYear(), date.getMonth() + 1, 0));
+}
+
+function previousMonthRange(dateString: string) {
+  const date = parseLocalDate(dateString);
+  const previous = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+
+  return {
+    from: formatLocalDate(previous),
+    to: formatLocalDate(new Date(previous.getFullYear(), previous.getMonth() + 1, 0))
+  };
+}
+
+function percentChange(current: number, previous: number) {
+  if (!previous && !current) return 0;
+  if (!previous) return 100;
+
+  return ((current - previous) / previous) * 100;
+}
+
+function formatPercent(value: number) {
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(2)}%`;
+}
+
 function isDateInRange(date: string, fromDate: string, toDate: string) {
   if (!date) return false;
   if (fromDate && date < fromDate) return false;
@@ -3627,6 +3678,116 @@ function Reports({ reports, receipts, expenses = [] }: any) {
       .slice(0, 15);
   }, [dateFilteredReports]);
 
+  function totalsForRange(rangeFrom: string, rangeTo: string) {
+    let sale = 0;
+    let purchase = 0;
+    let operatingExpenses = 0;
+
+    reports
+      .filter((r: any) => isDateInRange(r.date, rangeFrom, rangeTo))
+      .forEach((r: any) => {
+        r.consumption_items?.forEach((it: any) => {
+          const values = calculateConsumptionItemValues(it);
+          sale += values.sale;
+          purchase += values.purchase;
+        });
+      });
+
+    expenses
+      .filter((e: any) => isDateInRange(e.date, rangeFrom, rangeTo))
+      .forEach((e: any) => {
+        operatingExpenses += Number(e.amount ?? 0);
+      });
+
+    return {
+      sale,
+      purchase,
+      drinkProfit: sale - purchase,
+      operatingExpenses,
+      finalProfit: sale - purchase - operatingExpenses
+    };
+  }
+
+  const analytics = useMemo(() => {
+    const selectedMonthStart = monthStartFromDate(toDate);
+    const selectedMonthEnd = monthEndFromDate(toDate);
+    const previousMonth = previousMonthRange(toDate);
+
+    const currentMonthTotals = totalsForRange(selectedMonthStart, selectedMonthEnd);
+    const previousMonthTotals = totalsForRange(previousMonth.from, previousMonth.to);
+
+    const selectedDayTotals = totalsForRange(toDate, toDate);
+    const previousDay = addDaysToDate(toDate, -1);
+    const previousDayTotals = totalsForRange(previousDay, previousDay);
+
+    const year = parseLocalDate(toDate).getFullYear();
+    const yearStart = `${year}-01-01`;
+    const yearEnd = `${year}-12-31`;
+
+    const closedMonths: {
+      month: string;
+      sale: number;
+      drinkProfit: number;
+      finalProfit: number;
+    }[] = [];
+
+    for (let monthIndex = 0; monthIndex < 12; monthIndex++) {
+      const monthStart = formatLocalDate(new Date(year, monthIndex, 1));
+      const monthEnd = formatLocalDate(new Date(year, monthIndex + 1, 0));
+
+      if (monthStart > toDate) continue;
+
+      const totals = totalsForRange(monthStart, monthEnd);
+
+      if (totals.sale > 0 || totals.operatingExpenses > 0) {
+        closedMonths.push({
+          month: monthStart.slice(0, 7),
+          sale: totals.sale,
+          drinkProfit: totals.drinkProfit,
+          finalProfit: totals.finalProfit
+        });
+      }
+    }
+
+    const monthsWithData = Math.max(closedMonths.length, 1);
+    const avgMonthlySale =
+      closedMonths.reduce((sum, m) => sum + m.sale, 0) / monthsWithData;
+    const avgMonthlyDrinkProfit =
+      closedMonths.reduce((sum, m) => sum + m.drinkProfit, 0) / monthsWithData;
+    const avgMonthlyFinalProfit =
+      closedMonths.reduce((sum, m) => sum + m.finalProfit, 0) / monthsWithData;
+
+    const currentMonthNumber = parseLocalDate(toDate).getMonth() + 1;
+    const remainingMonths = Math.max(12 - currentMonthNumber, 0);
+
+    const currentYearTotals = totalsForRange(yearStart, yearEnd);
+
+    return {
+      selectedMonthStart,
+      selectedMonthEnd,
+      previousMonth,
+      previousDay,
+      currentMonthTotals,
+      previousMonthTotals,
+      selectedDayTotals,
+      previousDayTotals,
+      monthSaleChange: percentChange(
+        currentMonthTotals.sale,
+        previousMonthTotals.sale
+      ),
+      daySaleChange: percentChange(selectedDayTotals.sale, previousDayTotals.sale),
+      avgMonthlySale,
+      avgMonthlyDrinkProfit,
+      avgMonthlyFinalProfit,
+      remainingMonths,
+      forecastSaleToYearEnd: currentYearTotals.sale + avgMonthlySale * remainingMonths,
+      forecastDrinkProfitToYearEnd:
+        currentYearTotals.drinkProfit + avgMonthlyDrinkProfit * remainingMonths,
+      forecastFinalProfitToYearEnd:
+        currentYearTotals.finalProfit + avgMonthlyFinalProfit * remainingMonths
+    };
+  }, [reports, expenses, toDate]);
+
   const filteredReports = dateFilteredReports.filter((r: any) => {
     const q = normalizeText(search);
     if (!q) return true;
@@ -3727,6 +3888,86 @@ function Reports({ reports, receipts, expenses = [] }: any) {
             icon={<ClipboardList />}
             label="Zarada poslije troškova"
             value={money(periodTotals.finalProfit)}
+          />
+        </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Analitika i prognoza" defaultOpen={true}>
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <p className="text-sm font-semibold text-black/60">
+              Promet mjesec / prethodni mjesec
+            </p>
+            <h3
+              className={`mt-2 text-2xl font-black ${
+                analytics.monthSaleChange >= 0 ? "text-green-700" : "text-red-700"
+              }`}
+            >
+              {formatPercent(analytics.monthSaleChange)}
+            </h3>
+            <div className="mt-3 space-y-2 text-sm">
+              <div className="flex justify-between rounded-xl bg-black/5 p-3">
+                <span>Ovaj mjesec</span>
+                <b>{money(analytics.currentMonthTotals.sale)}</b>
+              </div>
+              <div className="flex justify-between rounded-xl bg-black/5 p-3">
+                <span>Prethodni mjesec</span>
+                <b>{money(analytics.previousMonthTotals.sale)}</b>
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <p className="text-sm font-semibold text-black/60">
+              Promet dan / prethodni dan
+            </p>
+            <h3
+              className={`mt-2 text-2xl font-black ${
+                analytics.daySaleChange >= 0 ? "text-green-700" : "text-red-700"
+              }`}
+            >
+              {formatPercent(analytics.daySaleChange)}
+            </h3>
+            <div className="mt-3 space-y-2 text-sm">
+              <div className="flex justify-between rounded-xl bg-black/5 p-3">
+                <span>{toDate}</span>
+                <b>{money(analytics.selectedDayTotals.sale)}</b>
+              </div>
+              <div className="flex justify-between rounded-xl bg-black/5 p-3">
+                <span>{analytics.previousDay}</span>
+                <b>{money(analytics.previousDayTotals.sale)}</b>
+              </div>
+            </div>
+          </Card>
+
+          <Card>
+            <p className="text-sm font-semibold text-black/60">
+              Prosjek mjesečne zarade poslije troškova
+            </p>
+            <h3 className="mt-2 text-2xl font-black">
+              {money(analytics.avgMonthlyFinalProfit)}
+            </h3>
+            <p className="mt-2 text-sm text-black/60">
+              Procjena je rađena na osnovu mjeseci koji imaju promet ili troškove.
+            </p>
+          </Card>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <Stat
+            icon={<BarChart3 />}
+            label="Procijenjen promet do kraja godine"
+            value={money(analytics.forecastSaleToYearEnd)}
+          />
+          <Stat
+            icon={<ClipboardList />}
+            label="Procijenjena zarada od pića do kraja godine"
+            value={money(analytics.forecastDrinkProfitToYearEnd)}
+          />
+          <Stat
+            icon={<Warehouse />}
+            label="Procijenjena zarada poslije troškova do kraja godine"
+            value={money(analytics.forecastFinalProfitToYearEnd)}
           />
         </div>
       </CollapsibleSection>
