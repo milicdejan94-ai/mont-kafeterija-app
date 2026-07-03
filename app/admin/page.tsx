@@ -3825,7 +3825,7 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
       operatingExpenses,
       historicalRevenue: historicalRevenueTotal,
       totalRevenueWithHistory: sale + historicalRevenueTotal,
-      finalProfit: sale - purchase - operatingExpenses
+      finalProfit: sale + historicalRevenueTotal - purchase - operatingExpenses
     };
   }, [
     dateFilteredReports,
@@ -4014,7 +4014,7 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
       purchase,
       drinkProfit: appSale - purchase,
       operatingExpenses,
-      finalProfit: appSale - purchase - operatingExpenses
+      finalProfit: appSale + historicalSale - purchase - operatingExpenses
     };
   }
 
@@ -4058,8 +4058,7 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
     const yearToDateEstimatedDrinkProfit =
       yearToDateTotals.drinkProfit + estimatedHistoricalDrinkProfit;
 
-    const yearToDateEstimatedFinalProfit =
-      yearToDateEstimatedDrinkProfit - yearToDateTotals.operatingExpenses;
+    const yearToDateEstimatedFinalProfit = yearToDateTotals.finalProfit;
 
     const daysPassed = daysBetweenInclusive(yearStart, toDate);
     const daysRemaining = Math.max(daysBetweenInclusive(addDaysToDate(toDate, 1), yearEnd), 0);
@@ -4194,10 +4193,15 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
       </Card>
 
       <CollapsibleSection title="Sažetak perioda" defaultOpen={true}>
+        <p className="mb-4 rounded-2xl bg-blue-50 p-3 text-sm text-blue-900">
+          Promet iz aplikacije je odvojeno prikazan, a zarada poslije troškova uključuje i istorijski promet kase.
+          Lager se ne dira istorijskim prometom.
+        </p>
+
         <div className="grid gap-4 md:grid-cols-6">
           <Stat
             icon={<BarChart3 />}
-            label="Promet za period"
+            label="Promet iz aplikacije"
             value={money(periodTotals.sale)}
           />
           <Stat
@@ -4222,7 +4226,7 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
           />
           <Stat
             icon={<ClipboardList />}
-            label="Zarada poslije troškova"
+            label="Zarada poslije troškova sa istorijom"
             value={money(periodTotals.finalProfit)}
           />
         </div>
@@ -4244,8 +4248,8 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
       <CollapsibleSection title="Analitika i prognoza" defaultOpen={true}>
         <p className="mb-4 rounded-2xl bg-blue-50 p-3 text-sm text-blue-900">
           Promet i procenti koriste promet iz aplikacije + istorijski promet kase.
-          Mjesečno poređenje se sada računa do istog dana u mjesecu. Zarada za istorijski promet
-          procjenjuje se na osnovu stvarne marže iz aplikacije.
+          Zarada poslije troškova koristi istorijski promet + promet iz aplikacije minus bankarske troškove i nabavnu vrijednost iz aplikacije.
+          Procjena zarade od pića koristi stvarnu maržu iz aplikacije.
         </p>
 
         <div className="grid gap-4 md:grid-cols-3">
