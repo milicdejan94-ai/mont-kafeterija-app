@@ -186,6 +186,37 @@ function addDaysToDate(dateString: string, days: number) {
   return formatLocalDate(date);
 }
 
+function daysBetweenInclusive(fromDate: string, toDate: string) {
+  const start = parseLocalDate(fromDate).getTime();
+  const end = parseLocalDate(toDate).getTime();
+
+  if (end < start) return 0;
+
+  return Math.floor((end - start) / 86400000) + 1;
+}
+
+function previousMonthSameDayRange(dateString: string) {
+  const date = parseLocalDate(dateString);
+  const currentDay = date.getDate();
+  const previousMonthStart = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+  const previousMonthEnd = new Date(date.getFullYear(), date.getMonth(), 0);
+  const comparableDay = Math.min(currentDay, previousMonthEnd.getDate());
+
+  return {
+    from: formatLocalDate(previousMonthStart),
+    to: formatLocalDate(
+      new Date(previousMonthStart.getFullYear(), previousMonthStart.getMonth(), comparableDay)
+    ),
+    fullFrom: formatLocalDate(previousMonthStart),
+    fullTo: formatLocalDate(previousMonthEnd)
+  };
+}
+
+function yearEndFromDate(dateString: string) {
+  const date = parseLocalDate(dateString);
+  return `${date.getFullYear()}-12-31`;
+}
+
 function monthStartFromDate(dateString: string) {
   const date = parseLocalDate(dateString);
   return formatLocalDate(new Date(date.getFullYear(), date.getMonth(), 1));
@@ -3945,10 +3976,21 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
   const analytics = useMemo(() => {
     const selectedMonthStart = monthStartFromDate(toDate);
     const selectedMonthEnd = monthEndFromDate(toDate);
-    const previousMonth = previousMonthRange(toDate);
+    const previousMonth = previousMonthSameDayRange(toDate);
+    const previousFullMonth = {
+      from: previousMonth.fullFrom,
+      to: previousMonth.fullTo
+    };
 
-    const currentMonthTotals = totalsForRange(selectedMonthStart, selectedMonthEnd);
-    const previousMonthTotals = totalsForRange(previousMonth.from, previousMonth.to);
+    const currentMonthToDateTotals = totalsForRange(selectedMonthStart, toDate);
+    const previousMonthSameDayTotals = totalsForRange(
+      previousMonth.from,
+      previousMonth.to
+    );
+    const previousFullMonthTotals = totalsForRange(
+      previousFullMonth.from,
+      previousFullMonth.to
+    );
 
     const selectedDayTotals = totalsForRange(toDate, toDate);
     const previousDay = addDaysToDate(toDate, -1);
@@ -3958,67 +4000,81 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
     const yearStart = `${year}-01-01`;
     const yearEnd = `${year}-12-31`;
 
-    const closedMonths: {
-      month: string;
-      sale: number;
-      drinkProfit: number;
-      finalProfit: number;
-    }[] = [];
+    const yearToDateTotals = totalsForRange(yearStart, toDate);
 
-    for (let monthIndex = 0; monthIndex < 12; monthIndex++) {
-      const monthStart = formatLocalDate(new Date(year, monthIndex, 1));
-      const monthEnd = formatLocalDate(new Date(year, monthIndex + 1, 0));
+    const appMarginRate =
+      yearToDateTotals.appSale > 0
+        ? yearToDateTotals.drinkProfit / yearToDateTotals.appSale
+        : 0;
 
-      if (monthStart > toDate) continue;
+    const estimatedHistoricalDrinkProfit =
+      yearToDateTotals.historicalSale * appMarginRate;
 
-      const totals = totalsForRange(monthStart, monthEnd);
+    const yearToDateEstimatedDrinkProfit =
+      yearToDateTotals.drinkProfit + estimatedHistoricalDrinkProfit;
 
-      if (totals.sale > 0 || totals.operatingExpenses > 0) {
-        closedMonths.push({
-          month: monthStart.slice(0, 7),
-          sale: totals.sale,
-          drinkProfit: totals.drinkProfit,
-          finalProfit: totals.finalProfit
-        });
-      }
-    }
+    const yearToDateEstimatedFinalProfit =
+      yearToDateEstimatedDrinkProfit - yearToDateTotals.operatingExpenses;
 
-    const monthsWithData = Math.max(closedMonths.length, 1);
-    const avgMonthlySale =
-      closedMonths.reduce((sum, m) => sum + m.sale, 0) / monthsWithData;
-    const avgMonthlyDrinkProfit =
-      closedMonths.reduce((sum, m) => sum + m.drinkProfit, 0) / monthsWithData;
-    const avgMonthlyFinalProfit =
-      closedMonths.reduce((sum, m) => sum + m.finalProfit, 0) / monthsWithData;
+    const daysPassed = daysBetweenInclusive(yearStart, toDate);
+    const daysRemaining = Math.max(daysBetweenInclusive(addDaysToDate(toDate, 1), yearEnd), 0);
 
-    const currentMonthNumber = parseLocalDate(toDate).getMonth() + 1;
-    const remainingMonths = Math.max(12 - currentMonthNumber, 0);
+    const avgDailyRevenue =
+      daysPassed > 0 ? yearToDateTotals.sale / daysPassed : 0;
 
-    const currentYearTotals = totalsForRange(yearStart, yearEnd);
+    const avgDailyDrinkProfit =
+      daysPassed > 0 ? yearToDateEstimatedDrinkProfit / daysPassed : 0;
+
+    const avgDailyFinalProfit =
+      daysPassed > 0 ? yearToDateEstimatedFinalProfit / daysPassed : 0;
+
+    const currentMonthDaysPassed = daysBetweenInclusive(selectedMonthStart, toDate);
+    const currentMonthDaysTotal = daysBetweenInclusive(
+      selectedMonthStart,
+      selectedMonthEnd
+    );
+    const currentMonthDailyAverage =
+      currentMonthDaysPassed > 0
+        ? currentMonthToDateTotals.sale / currentMonthDaysPassed
+        : 0;
+    const projectedCurrentMonthSale =
+      currentMonthDailyAverage * currentMonthDaysTotal;
 
     return {
       selectedMonthStart,
       selectedMonthEnd,
       previousMonth,
+      previousFullMonth,
       previousDay,
-      currentMonthTotals,
-      previousMonthTotals,
+      currentMonthTotals: currentMonthToDateTotals,
+      previousMonthTotals: previousMonthSameDayTotals,
+      previousFullMonthTotals,
       selectedDayTotals,
       previousDayTotals,
       monthSaleChange: percentChange(
-        currentMonthTotals.sale,
-        previousMonthTotals.sale
+        currentMonthToDateTotals.sale,
+        previousMonthSameDayTotals.sale
+      ),
+      projectedMonthSaleChange: percentChange(
+        projectedCurrentMonthSale,
+        previousFullMonthTotals.sale
       ),
       daySaleChange: percentChange(selectedDayTotals.sale, previousDayTotals.sale),
-      avgMonthlySale,
-      avgMonthlyDrinkProfit,
-      avgMonthlyFinalProfit,
-      remainingMonths,
-      forecastSaleToYearEnd: currentYearTotals.sale + avgMonthlySale * remainingMonths,
+      appMarginRate,
+      estimatedHistoricalDrinkProfit,
+      yearToDateEstimatedDrinkProfit,
+      yearToDateEstimatedFinalProfit,
+      daysPassed,
+      daysRemaining,
+      avgDailyRevenue,
+      avgDailyDrinkProfit,
+      avgDailyFinalProfit,
+      projectedCurrentMonthSale,
+      forecastSaleToYearEnd: yearToDateTotals.sale + avgDailyRevenue * daysRemaining,
       forecastDrinkProfitToYearEnd:
-        currentYearTotals.drinkProfit + avgMonthlyDrinkProfit * remainingMonths,
+        yearToDateEstimatedDrinkProfit + avgDailyDrinkProfit * daysRemaining,
       forecastFinalProfitToYearEnd:
-        currentYearTotals.finalProfit + avgMonthlyFinalProfit * remainingMonths
+        yearToDateEstimatedFinalProfit + avgDailyFinalProfit * daysRemaining
     };
   }, [reports, expenses, historicalRevenue, toDate]);
 
@@ -4143,14 +4199,14 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
       <CollapsibleSection title="Analitika i prognoza" defaultOpen={true}>
         <p className="mb-4 rounded-2xl bg-blue-50 p-3 text-sm text-blue-900">
           Promet i procenti koriste promet iz aplikacije + istorijski promet kase.
-          Zarada od pića i zarada poslije troškova koriste samo podatke iz aplikacije,
-          jer za istorijski promet nemamo nabavnu vrijednost artikala.
+          Mjesečno poređenje se sada računa do istog dana u mjesecu. Zarada za istorijski promet
+          procjenjuje se na osnovu stvarne marže iz aplikacije.
         </p>
 
         <div className="grid gap-4 md:grid-cols-3">
           <Card>
             <p className="text-sm font-semibold text-black/60">
-              Promet mjesec / prethodni mjesec
+              Promet mjesec do danas / prethodni mjesec do istog dana
             </p>
             <h3
               className={`mt-2 text-2xl font-black ${
@@ -4161,11 +4217,15 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
             </h3>
             <div className="mt-3 space-y-2 text-sm">
               <div className="flex justify-between rounded-xl bg-black/5 p-3">
-                <span>Ovaj mjesec</span>
+                <span>
+                  {analytics.selectedMonthStart} - {toDate}
+                </span>
                 <b>{money(analytics.currentMonthTotals.sale)}</b>
               </div>
               <div className="flex justify-between rounded-xl bg-black/5 p-3">
-                <span>Prethodni mjesec</span>
+                <span>
+                  {analytics.previousMonth.from} - {analytics.previousMonth.to}
+                </span>
                 <b>{money(analytics.previousMonthTotals.sale)}</b>
               </div>
             </div>
@@ -4196,15 +4256,34 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
 
           <Card>
             <p className="text-sm font-semibold text-black/60">
-              Prosjek mjesečne zarade poslije troškova
+              Procijenjena marža pića za istorijski promet
             </p>
             <h3 className="mt-2 text-2xl font-black">
-              {money(analytics.avgMonthlyFinalProfit)}
+              {formatPercent(analytics.appMarginRate * 100)}
             </h3>
             <p className="mt-2 text-sm text-black/60">
-              Procjena je rađena na osnovu mjeseci koji imaju promet ili troškove.
+              Marža = zarada od pića iz aplikacije / promet iz aplikacije. Ta marža se koristi
+              za procjenu zarade na starom prometu iz kase.
             </p>
           </Card>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <Stat
+            icon={<BarChart3 />}
+            label="Procjena tekućeg mjeseca"
+            value={money(analytics.projectedCurrentMonthSale)}
+          />
+          <Stat
+            icon={<ClipboardList />}
+            label="Rast/pad procjene mjeseca vs prethodni cijeli mjesec"
+            value={formatPercent(analytics.projectedMonthSaleChange)}
+          />
+          <Stat
+            icon={<Warehouse />}
+            label="Dnevni prosjek prometa od početka godine"
+            value={money(analytics.avgDailyRevenue)}
+          />
         </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-3">
