@@ -64,6 +64,8 @@ type OperatingExpense = {
   category: string;
   description: string | null;
   supplier: string | null;
+  expense_type: string | null;
+  affects_operational_profit: boolean | null;
   amount: number;
   note: string | null;
   created_by: string | null;
@@ -90,6 +92,25 @@ const categoryOptions = [
 ];
 
 const unitOptions = ["kom", "kg", "doza", "l", "boca"];
+
+const expenseTypeOptions = [
+  { value: "operational", label: "Operativni trošak" },
+  { value: "goods", label: "Roba / piće" },
+  { value: "salary", label: "Plate" },
+  { value: "tax", label: "Porezi i doprinosi" },
+  { value: "rent", label: "Kirija" },
+  { value: "utilities", label: "Režije" },
+  { value: "bank_fee", label: "Bankarske provizije" },
+  { value: "investment", label: "Investicija / oprema" },
+  { value: "other", label: "Ostalo" }
+];
+
+function expenseTypeLabel(value: string | null | undefined) {
+  return (
+    expenseTypeOptions.find((option) => option.value === value)?.label ||
+    "Operativni trošak"
+  );
+}
 
 function normalizeText(value: string | null | undefined) {
   return String(value ?? "").toLowerCase().trim();
@@ -3439,6 +3460,8 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
     date: getTodayDate(),
     category: "Plate",
     supplier: "",
+    expense_type: "operational",
+    affects_operational_profit: true,
     description: "",
     amount: "",
     note: ""
@@ -3459,6 +3482,8 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
           normalizeText(e.date).includes(q) ||
           normalizeText(e.category).includes(q) ||
           normalizeText(e.supplier).includes(q) ||
+          normalizeText(e.expense_type).includes(q) ||
+          normalizeText(expenseTypeLabel(e.expense_type)).includes(q) ||
           normalizeText(e.description).includes(q) ||
           normalizeText(e.note).includes(q)
         );
@@ -3468,24 +3493,42 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
   const totals = useMemo(() => {
     const byCategory: Record<string, number> = {};
     const bySupplier: Record<string, number> = {};
+    const byType: Record<string, number> = {};
     let total = 0;
+    let operationalTotal = 0;
+    let excludedTotal = 0;
 
     filteredExpenses.forEach((e: OperatingExpense) => {
       const amount = Number(e.amount ?? 0);
       total += amount;
+
+      if (e.affects_operational_profit === false) {
+        excludedTotal += amount;
+      } else {
+        operationalTotal += amount;
+      }
+
       byCategory[e.category] = (byCategory[e.category] ?? 0) + amount;
 
       const supplier = e.supplier || "Bez komitenta";
       bySupplier[supplier] = (bySupplier[supplier] ?? 0) + amount;
+
+      const type = expenseTypeLabel(e.expense_type);
+      byType[type] = (byType[type] ?? 0) + amount;
     });
 
     return {
       total,
+      operationalTotal,
+      excludedTotal,
       byCategory: Object.entries(byCategory)
         .map(([category, amount]) => ({ category, amount }))
         .sort((a, b) => b.amount - a.amount),
       bySupplier: Object.entries(bySupplier)
         .map(([supplier, amount]) => ({ supplier, amount }))
+        .sort((a, b) => b.amount - a.amount),
+      byType: Object.entries(byType)
+        .map(([type, amount]) => ({ type, amount }))
         .sort((a, b) => b.amount - a.amount)
     };
   }, [filteredExpenses]);
@@ -3504,6 +3547,8 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
       date: form.date,
       category: form.category,
       supplier: form.supplier || null,
+      expense_type: form.expense_type,
+      affects_operational_profit: form.affects_operational_profit,
       description: form.description || null,
       amount: Number(form.amount),
       note: form.note || null,
@@ -3520,6 +3565,8 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
       date: getTodayDate(),
       category: "Plate",
       supplier: "",
+      expense_type: "operational",
+      affects_operational_profit: true,
       description: "",
       amount: "",
       note: ""
@@ -3592,6 +3639,28 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
             </Select>
           </Field>
 
+          <Field label="Tip troška">
+            <Select
+              value={form.expense_type}
+              onChange={(e) => {
+                const value = e.target.value;
+
+                setForm({
+                  ...form,
+                  expense_type: value,
+                  affects_operational_profit:
+                    value === "investment" ? false : form.affects_operational_profit
+                });
+              }}
+            >
+              {expenseTypeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
           <Field label="Opis">
             <Input
               placeholder="npr. plata šankera, struja..."
@@ -3614,6 +3683,28 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
 
           <div className="flex items-end">
             <Button className="w-full">Sačuvaj</Button>
+          </div>
+
+          <div className="md:col-span-6 rounded-2xl bg-black/5 p-3">
+            <label className="flex items-start gap-3 text-sm font-semibold">
+              <input
+                type="checkbox"
+                checked={form.affects_operational_profit}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    affects_operational_profit: e.target.checked
+                  })
+                }
+              />
+              <span>
+                Ulazi u operativnu zaradu
+                <span className="block font-normal text-black/60">
+                  Isključi ovo za jednokratne investicije ili troškove koje ne želiš
+                  da kvare redovni rezultat kafeterije.
+                </span>
+              </span>
+            </label>
           </div>
 
           <div className="md:col-span-6">
@@ -3674,15 +3765,28 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
           />
           <Stat
             icon={<ClipboardList />}
-            label="Broj stavki"
-            value={filteredExpenses.length}
+            label="Operativni troškovi"
+            value={money(totals.operationalTotal)}
           />
           <Stat
             icon={<BarChart3 />}
-            label="Prosjek po stavci"
-            value={money(filteredExpenses.length ? totals.total / filteredExpenses.length : 0)}
+            label="Van operativne zarade"
+            value={money(totals.excludedTotal)}
           />
         </div>
+
+        {totals.byType.length > 0 && (
+          <CollapsibleSection title="Troškovi po tipu" defaultOpen={true}>
+            <div className="grid gap-2 md:grid-cols-3">
+              {totals.byType.map((item) => (
+                <div key={item.type} className="rounded-2xl bg-black/5 p-3">
+                  <p className="text-sm text-black/60">{item.type}</p>
+                  <b>{money(item.amount)}</b>
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
+        )}
 
         {totals.byCategory.length > 0 && (
           <CollapsibleSection title="Troškovi po kategorijama" defaultOpen={true}>
@@ -3721,6 +3825,8 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
                     <th className="p-3">Datum</th>
                     <th>Kategorija</th>
                     <th>Komitent</th>
+                    <th>Tip</th>
+                    <th>Operativno</th>
                     <th>Opis</th>
                     <th>Napomena</th>
                     <th>Iznos</th>
@@ -3734,6 +3840,18 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
                       <td className="p-3">{expense.date}</td>
                       <td className="font-semibold">{expense.category}</td>
                       <td>{expense.supplier || "-"}</td>
+                      <td>{expenseTypeLabel(expense.expense_type)}</td>
+                      <td>
+                        {expense.affects_operational_profit === false ? (
+                          <span className="rounded-full bg-orange-50 px-2 py-1 text-xs font-black text-orange-800">
+                            Ne
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-green-50 px-2 py-1 text-xs font-black text-green-800">
+                            Da
+                          </span>
+                        )}
+                      </td>
                       <td>{expense.description || "-"}</td>
                       <td>{expense.note || "-"}</td>
                       <td className="font-black">{money(expense.amount)}</td>
@@ -3813,8 +3931,18 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
         });
     });
 
+    let allExpenses = 0;
+    let excludedExpenses = 0;
+
     dateFilteredExpenses.forEach((e: any) => {
-      operatingExpenses += Number(e.amount ?? 0);
+      const amount = Number(e.amount ?? 0);
+      allExpenses += amount;
+
+      if (e.affects_operational_profit === false) {
+        excludedExpenses += amount;
+      } else {
+        operatingExpenses += amount;
+      }
     });
 
     return {
@@ -3823,9 +3951,13 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
       profit: sale - purchase,
       receivedPurchase,
       operatingExpenses,
+      allExpenses,
+      excludedExpenses,
       historicalRevenue: historicalRevenueTotal,
       totalRevenueWithHistory: sale + historicalRevenueTotal,
-      finalProfit: sale + historicalRevenueTotal - purchase - operatingExpenses
+      finalProfit: sale + historicalRevenueTotal - purchase - operatingExpenses,
+      cashflowAfterAllCosts:
+        sale + historicalRevenueTotal - purchase - allExpenses
     };
   }, [
     dateFilteredReports,
@@ -3984,6 +4116,7 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
     let historicalSale = 0;
     let purchase = 0;
     let operatingExpenses = 0;
+    let allExpenses = 0;
 
     reports
       .filter((r: any) => isDateInRange(r.date, rangeFrom, rangeTo))
@@ -4004,7 +4137,12 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
     expenses
       .filter((e: any) => isDateInRange(e.date, rangeFrom, rangeTo))
       .forEach((e: any) => {
-        operatingExpenses += Number(e.amount ?? 0);
+        const amount = Number(e.amount ?? 0);
+        allExpenses += amount;
+
+        if (e.affects_operational_profit !== false) {
+          operatingExpenses += amount;
+        }
       });
 
     return {
@@ -4014,7 +4152,9 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
       purchase,
       drinkProfit: appSale - purchase,
       operatingExpenses,
-      finalProfit: appSale + historicalSale - purchase - operatingExpenses
+      allExpenses,
+      finalProfit: appSale + historicalSale - purchase - operatingExpenses,
+      cashflowAfterAllCosts: appSale + historicalSale - purchase - allExpenses
     };
   }
 
@@ -4221,7 +4361,7 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
           />
           <Stat
             icon={<Trash2 />}
-            label="Troškovi perioda"
+            label="Operativni troškovi"
             value={money(periodTotals.operatingExpenses)}
           />
           <Stat
@@ -4242,6 +4382,24 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
           icon={<ClipboardList />}
           label="Ukupan promet sa istorijom"
           value={money(periodTotals.totalRevenueWithHistory)}
+        />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Stat
+          icon={<Trash2 />}
+          label="Svi troškovi u periodu"
+          value={money(periodTotals.allExpenses)}
+        />
+        <Stat
+          icon={<ClipboardList />}
+          label="Van operativne zarade"
+          value={money(periodTotals.excludedExpenses)}
+        />
+        <Stat
+          icon={<BarChart3 />}
+          label="Cashflow poslije svih troškova"
+          value={money(periodTotals.cashflowAfterAllCosts)}
         />
       </div>
 
