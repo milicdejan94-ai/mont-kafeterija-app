@@ -24,6 +24,7 @@ type Tab =
   | "storage"
   | "adjustments"
   | "expenses"
+  | "historical"
   | "daily"
   | "locked"
   | "reports"
@@ -65,6 +66,15 @@ type OperatingExpense = {
   amount: number;
   note: string | null;
   created_by: string | null;
+  created_at: string;
+};
+
+type HistoricalRevenue = {
+  id: string;
+  date: string;
+  amount: number;
+  source: string | null;
+  note: string | null;
   created_at: string;
 };
 
@@ -225,6 +235,7 @@ export default function AdminPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [adjustments, setAdjustments] = useState<StockAdjustment[]>([]);
   const [expenses, setExpenses] = useState<OperatingExpense[]>([]);
+  const [historicalRevenue, setHistoricalRevenue] = useState<HistoricalRevenue[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [message, setMessage] = useState("");
 
@@ -260,7 +271,8 @@ export default function AdminPage() {
       { data: sr },
       { data: sp },
       { data: adj },
-      { data: exp }
+      { data: exp },
+      { data: hist }
     ] = await Promise.all([
       supabase.from("products").select("*").order("name"),
       supabase.from("stock_levels").select("*, products(*)").order("location"),
@@ -284,7 +296,12 @@ export default function AdminPage() {
         .from("operating_expenses")
         .select("*")
         .order("date", { ascending: false })
-        .limit(500)
+        .limit(500),
+      supabase
+        .from("historical_revenue")
+        .select("*")
+        .order("date", { ascending: false })
+        .limit(1000)
     ]);
 
     setProducts(sortProductsAZ((p ?? []) as Product[]));
@@ -294,6 +311,7 @@ export default function AdminPage() {
     setSuppliers((sp ?? []) as Supplier[]);
     setAdjustments((adj ?? []) as StockAdjustment[]);
     setExpenses((exp ?? []) as OperatingExpense[]);
+    setHistoricalRevenue((hist ?? []) as HistoricalRevenue[]);
   }
 
   async function logout() {
@@ -379,6 +397,7 @@ export default function AdminPage() {
     ["receipt", "Prijem robe"],
     ["adjustments", "Korekcije"],
     ["expenses", "Troškovi"],
+    ["historical", "Istorijski promet"],
     ["daily", "Dnevni zaključak"],
     ["locked", "Zaključane smjene"],
     ["suppliers", "Komitenti"],
@@ -489,6 +508,10 @@ export default function AdminPage() {
           />
         )}
 
+        {tab === "historical" && (
+          <HistoricalRevenueView historicalRevenue={historicalRevenue} />
+        )}
+
         {tab === "daily" && <DailySummaryView reports={activeReports} />}
 
         {tab === "locked" && (
@@ -509,6 +532,7 @@ export default function AdminPage() {
             reports={activeReports}
             receipts={receipts}
             expenses={expenses}
+            historicalRevenue={historicalRevenue}
             productById={productById}
           />
         )}
@@ -2491,6 +2515,168 @@ function LockedShiftsView({
   );
 }
 
+
+function HistoricalRevenueView({
+  historicalRevenue
+}: {
+  historicalRevenue: HistoricalRevenue[];
+}) {
+  const [fromDate, setFromDate] = useState("2026-01-01");
+  const [toDate, setToDate] = useState(getTodayDate());
+  const [search, setSearch] = useState("");
+
+  const filtered = historicalRevenue.filter((row) => {
+    const q = normalizeText(search);
+
+    return (
+      isDateInRange(row.date, fromDate, toDate) &&
+      (!q ||
+        normalizeText(row.date).includes(q) ||
+        normalizeText(row.source).includes(q) ||
+        normalizeText(row.note).includes(q))
+    );
+  });
+
+  const total = filtered.reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+
+  const monthly = Object.values(
+    filtered.reduce(
+      (
+        acc: Record<string, { month: string; amount: number; days: number }>,
+        row
+      ) => {
+        const month = row.date.slice(0, 7);
+
+        if (!acc[month]) {
+          acc[month] = { month, amount: 0, days: 0 };
+        }
+
+        acc[month].amount += Number(row.amount ?? 0);
+        acc[month].days += 1;
+
+        return acc;
+      },
+      {}
+    )
+  ).sort((a, b) => a.month.localeCompare(b.month));
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <h2 className="text-xl font-black">Istorijski promet kase</h2>
+        <p className="mt-2 text-sm text-black/60">
+          Ovo je promet iz stare kase koji služi samo za statistiku. Ne dira lager,
+          ne skida artikle i ne pravi šankerske smjene.
+        </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-[180px_180px_1fr_auto] md:items-end">
+          <Field label="Od datuma">
+            <Input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Do datuma">
+            <Input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Pretraga">
+            <Input
+              placeholder="Pretraži izvor ili napomenu..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </Field>
+
+          <SecondaryButton
+            type="button"
+            onClick={() => {
+              setFromDate("2026-01-01");
+              setToDate(getTodayDate());
+              setSearch("");
+            }}
+          >
+            Reset
+          </SecondaryButton>
+        </div>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Stat icon={<BarChart3 />} label="Istorijski promet u periodu" value={money(total)} />
+        <Stat icon={<ClipboardList />} label="Dana sa prometom" value={filtered.length} />
+        <Stat
+          icon={<Warehouse />}
+          label="Prosjek po danu"
+          value={money(filtered.length ? total / filtered.length : 0)}
+        />
+      </div>
+
+      <Card>
+        <h2 className="mb-4 text-xl font-black">Mjesečni pregled</h2>
+
+        <div className="overflow-auto rounded-xl border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-black/5">
+              <tr>
+                <th className="p-3">Mjesec</th>
+                <th>Dana</th>
+                <th>Promet</th>
+                <th>Prosjek / dan</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {monthly.map((m) => (
+                <tr key={m.month} className="border-t">
+                  <td className="p-3 font-semibold">{m.month}</td>
+                  <td>{m.days}</td>
+                  <td className="font-black">{money(m.amount)}</td>
+                  <td>{money(m.days ? m.amount / m.days : 0)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="mb-4 text-xl font-black">Dnevni promet</h2>
+
+        <div className="overflow-auto rounded-xl border">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-black/5">
+              <tr>
+                <th className="p-3">Datum</th>
+                <th>Promet</th>
+                <th>Izvor</th>
+                <th>Napomena</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {filtered.map((row) => (
+                <tr key={row.id} className="border-t">
+                  <td className="p-3 font-semibold">{row.date}</td>
+                  <td className="font-black">{money(row.amount)}</td>
+                  <td>{row.source || "-"}</td>
+                  <td>{row.note || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+
 function DailySummaryView({ reports }: { reports: any[] }) {
   const [selectedDate, setSelectedDate] = useState(getTodayDate());
   const [showMoney, setShowMoney] = useState(true);
@@ -3497,7 +3683,7 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
   );
 }
 
-function Reports({ reports, receipts, expenses = [] }: any) {
+function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: any) {
   const [search, setSearch] = useState("");
   const [fromDate, setFromDate] = useState(getMonthStart());
   const [toDate, setToDate] = useState(getTodayDate());
@@ -3515,6 +3701,19 @@ function Reports({ reports, receipts, expenses = [] }: any) {
   const dateFilteredExpenses = useMemo(() => {
     return expenses.filter((e: any) => isDateInRange(e.date, fromDate, toDate));
   }, [expenses, fromDate, toDate]);
+
+  const dateFilteredHistoricalRevenue = useMemo(() => {
+    return historicalRevenue.filter((r: any) =>
+      isDateInRange(r.date, fromDate, toDate)
+    );
+  }, [historicalRevenue, fromDate, toDate]);
+
+  const historicalRevenueTotal = useMemo(() => {
+    return dateFilteredHistoricalRevenue.reduce(
+      (sum: number, row: any) => sum + Number(row.amount ?? 0),
+      0
+    );
+  }, [dateFilteredHistoricalRevenue]);
 
   const periodTotals = useMemo(() => {
     let sale = 0;
@@ -3548,9 +3747,16 @@ function Reports({ reports, receipts, expenses = [] }: any) {
       profit: sale - purchase,
       receivedPurchase,
       operatingExpenses,
+      historicalRevenue: historicalRevenueTotal,
+      totalRevenueWithHistory: sale + historicalRevenueTotal,
       finalProfit: sale - purchase - operatingExpenses
     };
-  }, [dateFilteredReports, dateFilteredReceipts, dateFilteredExpenses]);
+  }, [
+    dateFilteredReports,
+    dateFilteredReceipts,
+    dateFilteredExpenses,
+    historicalRevenueTotal
+  ]);
 
   const bartenderStats = useMemo(() => {
     const map: Record<
@@ -3698,7 +3904,8 @@ function Reports({ reports, receipts, expenses = [] }: any) {
   }, [dateFilteredReports]);
 
   function totalsForRange(rangeFrom: string, rangeTo: string) {
-    let sale = 0;
+    let appSale = 0;
+    let historicalSale = 0;
     let purchase = 0;
     let operatingExpenses = 0;
 
@@ -3707,9 +3914,15 @@ function Reports({ reports, receipts, expenses = [] }: any) {
       .forEach((r: any) => {
         r.consumption_items?.forEach((it: any) => {
           const values = calculateConsumptionItemValues(it);
-          sale += values.sale;
+          appSale += values.sale;
           purchase += values.purchase;
         });
+      });
+
+    historicalRevenue
+      .filter((r: any) => isDateInRange(r.date, rangeFrom, rangeTo))
+      .forEach((r: any) => {
+        historicalSale += Number(r.amount ?? 0);
       });
 
     expenses
@@ -3719,11 +3932,13 @@ function Reports({ reports, receipts, expenses = [] }: any) {
       });
 
     return {
-      sale,
+      appSale,
+      historicalSale,
+      sale: appSale + historicalSale,
       purchase,
-      drinkProfit: sale - purchase,
+      drinkProfit: appSale - purchase,
       operatingExpenses,
-      finalProfit: sale - purchase - operatingExpenses
+      finalProfit: appSale - purchase - operatingExpenses
     };
   }
 
@@ -3805,7 +4020,7 @@ function Reports({ reports, receipts, expenses = [] }: any) {
       forecastFinalProfitToYearEnd:
         currentYearTotals.finalProfit + avgMonthlyFinalProfit * remainingMonths
     };
-  }, [reports, expenses, toDate]);
+  }, [reports, expenses, historicalRevenue, toDate]);
 
   const filteredReports = dateFilteredReports.filter((r: any) => {
     const q = normalizeText(search);
@@ -3912,7 +4127,26 @@ function Reports({ reports, receipts, expenses = [] }: any) {
         </div>
       </CollapsibleSection>
 
+      <div className="grid gap-4 md:grid-cols-2">
+        <Stat
+          icon={<BarChart3 />}
+          label="Istorijski promet kase u periodu"
+          value={money(periodTotals.historicalRevenue)}
+        />
+        <Stat
+          icon={<ClipboardList />}
+          label="Ukupan promet sa istorijom"
+          value={money(periodTotals.totalRevenueWithHistory)}
+        />
+      </div>
+
       <CollapsibleSection title="Analitika i prognoza" defaultOpen={true}>
+        <p className="mb-4 rounded-2xl bg-blue-50 p-3 text-sm text-blue-900">
+          Promet i procenti koriste promet iz aplikacije + istorijski promet kase.
+          Zarada od pića i zarada poslije troškova koriste samo podatke iz aplikacije,
+          jer za istorijski promet nemamo nabavnu vrijednost artikala.
+        </p>
+
         <div className="grid gap-4 md:grid-cols-3">
           <Card>
             <p className="text-sm font-semibold text-black/60">
