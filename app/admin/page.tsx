@@ -63,6 +63,7 @@ type OperatingExpense = {
   date: string;
   category: string;
   description: string | null;
+  supplier: string | null;
   amount: number;
   note: string | null;
   created_by: string | null;
@@ -534,6 +535,7 @@ export default function AdminPage() {
         {tab === "expenses" && (
           <ExpensesView
             expenses={expenses}
+            suppliers={suppliers}
             refresh={refreshAll}
             setMessage={setMessage}
           />
@@ -3432,10 +3434,11 @@ const expenseCategories = [
   "Ostalo"
 ];
 
-function ExpensesView({ expenses, refresh, setMessage }: any) {
+function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
   const [form, setForm] = useState({
     date: getTodayDate(),
     category: "Plate",
+    supplier: "",
     description: "",
     amount: "",
     note: ""
@@ -3455,6 +3458,7 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
         return (
           normalizeText(e.date).includes(q) ||
           normalizeText(e.category).includes(q) ||
+          normalizeText(e.supplier).includes(q) ||
           normalizeText(e.description).includes(q) ||
           normalizeText(e.note).includes(q)
         );
@@ -3463,18 +3467,25 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
 
   const totals = useMemo(() => {
     const byCategory: Record<string, number> = {};
+    const bySupplier: Record<string, number> = {};
     let total = 0;
 
     filteredExpenses.forEach((e: OperatingExpense) => {
       const amount = Number(e.amount ?? 0);
       total += amount;
       byCategory[e.category] = (byCategory[e.category] ?? 0) + amount;
+
+      const supplier = e.supplier || "Bez komitenta";
+      bySupplier[supplier] = (bySupplier[supplier] ?? 0) + amount;
     });
 
     return {
       total,
       byCategory: Object.entries(byCategory)
         .map(([category, amount]) => ({ category, amount }))
+        .sort((a, b) => b.amount - a.amount),
+      bySupplier: Object.entries(bySupplier)
+        .map(([supplier, amount]) => ({ supplier, amount }))
         .sort((a, b) => b.amount - a.amount)
     };
   }, [filteredExpenses]);
@@ -3492,6 +3503,7 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
     const { error } = await supabase.from("operating_expenses").insert({
       date: form.date,
       category: form.category,
+      supplier: form.supplier || null,
       description: form.description || null,
       amount: Number(form.amount),
       note: form.note || null,
@@ -3507,6 +3519,7 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
     setForm({
       date: getTodayDate(),
       category: "Plate",
+      supplier: "",
       description: "",
       amount: "",
       note: ""
@@ -3540,7 +3553,7 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
       <Card>
         <h2 className="mb-4 text-xl font-black">Unos troškova</h2>
 
-        <form onSubmit={saveExpense} className="grid gap-3 md:grid-cols-5">
+        <form onSubmit={saveExpense} className="grid gap-3 md:grid-cols-6">
           <Field label="Datum">
             <Input
               type="date"
@@ -3559,6 +3572,23 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
                   {category}
                 </option>
               ))}
+            </Select>
+          </Field>
+
+          <Field label="Komitent">
+            <Select
+              value={form.supplier}
+              onChange={(e) => setForm({ ...form, supplier: e.target.value })}
+            >
+              <option value="">Bez komitenta</option>
+              {suppliers
+                .filter((s: Supplier) => s.active)
+                .map((s: Supplier) => (
+                  <option key={s.id} value={s.name}>
+                    {s.name}
+                  </option>
+                ))}
+              <option value="Ostalo">Ostalo</option>
             </Select>
           </Field>
 
@@ -3586,7 +3616,7 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
             <Button className="w-full">Sačuvaj</Button>
           </div>
 
-          <div className="md:col-span-5">
+          <div className="md:col-span-6">
             <Field label="Napomena">
               <Textarea
                 placeholder="Dodatna napomena, ako treba"
@@ -3667,6 +3697,19 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
           </CollapsibleSection>
         )}
 
+        {totals.bySupplier.length > 0 && (
+          <CollapsibleSection title="Troškovi po komitentima" defaultOpen={false}>
+            <div className="grid gap-2 md:grid-cols-3">
+              {totals.bySupplier.map((item) => (
+                <div key={item.supplier} className="rounded-2xl bg-black/5 p-3">
+                  <p className="text-sm text-black/60">{item.supplier}</p>
+                  <b>{money(item.amount)}</b>
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
+        )}
+
         <CollapsibleSection title="Lista troškova" defaultOpen={true}>
           {filteredExpenses.length === 0 ? (
             <p className="text-sm text-black/60">Nema troškova za izabrani period.</p>
@@ -3677,6 +3720,7 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
                   <tr>
                     <th className="p-3">Datum</th>
                     <th>Kategorija</th>
+                    <th>Komitent</th>
                     <th>Opis</th>
                     <th>Napomena</th>
                     <th>Iznos</th>
@@ -3689,6 +3733,7 @@ function ExpensesView({ expenses, refresh, setMessage }: any) {
                     <tr key={expense.id} className="border-t">
                       <td className="p-3">{expense.date}</td>
                       <td className="font-semibold">{expense.category}</td>
+                      <td>{expense.supplier || "-"}</td>
                       <td>{expense.description || "-"}</td>
                       <td>{expense.note || "-"}</td>
                       <td className="font-black">{money(expense.amount)}</td>
