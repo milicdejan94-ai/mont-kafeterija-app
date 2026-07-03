@@ -2375,6 +2375,12 @@ function LockedShiftsView({
                         <p className="text-xs text-black/50">
                           Stavki: {row.firstTotals.itemRows} • Količina: {row.firstTotals.quantity.toFixed(2)}
                         </p>
+                        {row.first.note && (
+                          <div className="mt-2 rounded-xl bg-yellow-50 p-2 text-xs text-yellow-900">
+                            <b>Napomena:</b>{" "}
+                            <span className="whitespace-pre-wrap">{row.first.note}</span>
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={() => cancelReport(row.first)}
@@ -2412,6 +2418,12 @@ function LockedShiftsView({
                         <p className="text-xs text-black/50">
                           Stavki: {row.secondTotals.itemRows} • Količina: {row.secondTotals.quantity.toFixed(2)}
                         </p>
+                        {row.second.note && (
+                          <div className="mt-2 rounded-xl bg-yellow-50 p-2 text-xs text-yellow-900">
+                            <b>Napomena:</b>{" "}
+                            <span className="whitespace-pre-wrap">{row.second.note}</span>
+                          </div>
+                        )}
                         <button
                           type="button"
                           onClick={() => cancelReport(row.second)}
@@ -2869,6 +2881,13 @@ function ShiftSummaryCard({
           {report ? "Zaključena" : "Nije zaključena"}
         </span>
       </div>
+
+      {report?.note && (
+        <div className="mb-4 rounded-2xl bg-yellow-50 p-3 text-sm text-yellow-900">
+          <p className="font-black">Napomena šankera</p>
+          <p className="mt-1 whitespace-pre-wrap">{report.note}</p>
+        </div>
+      )}
 
       <div className="grid gap-2 text-sm">
         {showMoney && (
@@ -3795,6 +3814,7 @@ function Reports({ reports, receipts, expenses = [] }: any) {
     return (
       normalizeText(r.date).includes(q) ||
       normalizeText(r.event_name).includes(q) ||
+      normalizeText(r.note).includes(q) ||
       normalizeText(r.profiles?.full_name).includes(q) ||
       r.consumption_items?.some((it: any) =>
         normalizeText(it.products?.name).includes(q)
@@ -4139,6 +4159,13 @@ function Reports({ reports, receipts, expenses = [] }: any) {
                 </div>
 
                 <p className="text-sm text-black/60">{r.event_name}</p>
+
+                {r.note && (
+                  <div className="mt-2 rounded-xl bg-yellow-50 p-3 text-sm text-yellow-900">
+                    <b>Napomena šankera:</b>{" "}
+                    <span className="whitespace-pre-wrap">{r.note}</span>
+                  </div>
+                )}
 
                 <div className="mt-2 grid gap-2 text-sm md:grid-cols-3">
                   <div className="rounded-lg bg-black/5 p-2">
