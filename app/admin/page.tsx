@@ -1633,6 +1633,11 @@ function ReceiptForm({ products, suppliers, receipts = [], refresh, setMessage }
                         <span className="rounded-full bg-black/5 px-2 py-1 text-xs font-semibold">
                           {receipt.location === "bar" ? "Šank" : "Magacin"}
                         </span>
+                        {(receipt.receipt_kind || "purchase") === "opening_balance" && (
+                          <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-black text-blue-800">
+                            Početno stanje
+                          </span>
+                        )}
                         {isCancelled && (
                           <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-black text-red-800">
                             Poništeno
@@ -1660,7 +1665,7 @@ function ReceiptForm({ products, suppliers, receipts = [], refresh, setMessage }
                       <p className="text-xs text-black/50">Vrijednost</p>
                       <p className="text-lg font-black">{money(total ?? 0)}</p>
 
-                      {!isCancelled && (
+                      {!isCancelled && (receipt.receipt_kind || "purchase") !== "opening_balance" && (
                         <button
                           type="button"
                           onClick={() => cancelReceipt(receipt)}
@@ -1726,7 +1731,9 @@ function ReceiptForm({ products, suppliers, receipts = [], refresh, setMessage }
                                 )}
                               </td>
                               <td>
-                                {!isCancelled && !itemCancelled && (
+                                {!isCancelled &&
+                                  !itemCancelled &&
+                                  (receipt.receipt_kind || "purchase") !== "opening_balance" && (
                                   <button
                                     type="button"
                                     onClick={() => cancelReceiptItem(it, receipt)}
@@ -3923,13 +3930,15 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
       });
     });
 
-    dateFilteredReceipts.forEach((r: any) => {
-      r.stock_receipt_items
-        ?.filter((it: any) => (it.status || "active") !== "cancelled")
-        .forEach((it: any) => {
-          receivedPurchase += receiptItemPurchaseValue(it);
-        });
-    });
+    dateFilteredReceipts
+      .filter((r: any) => (r.receipt_kind || "purchase") !== "opening_balance")
+      .forEach((r: any) => {
+        r.stock_receipt_items
+          ?.filter((it: any) => (it.status || "active") !== "cancelled")
+          .forEach((it: any) => {
+            receivedPurchase += receiptItemPurchaseValue(it);
+          });
+      });
 
     let allExpenses = 0;
     let excludedExpenses = 0;
@@ -4277,7 +4286,9 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
     );
   });
 
-  const filteredReceipts = dateFilteredReceipts.filter((r: any) => {
+  const filteredReceipts = dateFilteredReceipts
+    .filter((r: any) => (r.receipt_kind || "purchase") !== "opening_balance")
+    .filter((r: any) => {
     const q = normalizeText(search);
     if (!q) return true;
 
