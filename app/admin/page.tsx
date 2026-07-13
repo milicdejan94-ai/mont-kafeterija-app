@@ -25,6 +25,7 @@ type Tab =
   | "adjustments"
   | "expenses"
   | "historical"
+  | "backfill"
   | "daily"
   | "locked"
   | "reports"
@@ -289,6 +290,7 @@ export default function AdminPage() {
   const [adjustments, setAdjustments] = useState<StockAdjustment[]>([]);
   const [expenses, setExpenses] = useState<OperatingExpense[]>([]);
   const [historicalRevenue, setHistoricalRevenue] = useState<HistoricalRevenue[]>([]);
+  const [bartenders, setBartenders] = useState<any[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [message, setMessage] = useState("");
 
@@ -325,7 +327,8 @@ export default function AdminPage() {
       { data: sp },
       { data: adj },
       { data: exp },
-      { data: hist }
+      { data: hist },
+      { data: bart }
     ] = await Promise.all([
       supabase.from("products").select("*").order("name"),
       supabase.from("stock_levels").select("*, products(*)").order("location"),
@@ -354,7 +357,12 @@ export default function AdminPage() {
         .from("historical_revenue")
         .select("*")
         .order("date", { ascending: false })
-        .limit(1000)
+        .limit(1000),
+      supabase
+        .from("profiles")
+        .select("id, full_name, role, active")
+        .eq("active", true)
+        .order("full_name")
     ]);
 
     setProducts(sortProductsAZ((p ?? []) as Product[]));
@@ -365,6 +373,7 @@ export default function AdminPage() {
     setAdjustments((adj ?? []) as StockAdjustment[]);
     setExpenses((exp ?? []) as OperatingExpense[]);
     setHistoricalRevenue((hist ?? []) as HistoricalRevenue[]);
+    setBartenders((bart ?? []).filter((p: any) => p.role !== "admin"));
   }
 
   async function logout() {
@@ -451,6 +460,7 @@ export default function AdminPage() {
     ["adjustments", "Korekcije"],
     ["expenses", "Troškovi"],
     ["historical", "Istorijski promet"],
+    ["backfill", "Naknadni unos smjene"],
     ["daily", "Dnevni zaključak"],
     ["locked", "Zaključane smjene"],
     ["suppliers", "Komitenti"],
@@ -564,6 +574,16 @@ export default function AdminPage() {
 
         {tab === "historical" && (
           <HistoricalRevenueView historicalRevenue={historicalRevenue} />
+        )}
+
+        {tab === "backfill" && (
+          <AdminBackfillShiftView
+            products={products}
+            bartenders={bartenders}
+            reports={reports}
+            refresh={refreshAll}
+            setMessage={setMessage}
+          />
         )}
 
         {tab === "daily" && <DailySummaryView reports={activeReports} />}
@@ -2572,6 +2592,274 @@ function LockedShiftsView({
           </div>
         </Card>
       )}
+    </div>
+  );
+}
+
+
+
+function AdminBackfillShiftView({
+  products,
+  bartenders,
+  reports,
+  refresh,
+  setMessage
+}: {
+  products: Product[];
+  bartenders: any[];
+  reports: any[];
+  refresh: () => void;
+  setMessage: (message: string) => void;
+}) {
+  const [date, setDate] = useState(addDaysToDate(getTodayDate(), -1));
+  const [shift, setShift] = useState<"first" | "second">("first");
+  const [bartenderId, setBartenderId] = useState("");
+  const [note, setNote] = useState("");
+  const [adminNote, setAdminNote] = useState(
+    "Naknadni unos jer smjena nije zaključena na vrijeme"
+  );
+  const [productSearch, setProductSearch] = useState("");
+  const [items, setItems] = useState<ConsumptionItem[]>([
+    { product_id: "", quantity: "" }
+  ]);
+  const [saving, setSaving] = useState(false);
+
+  const activeProducts = sortProductsAZ(
+    products
+      .filter((p) => p.active)
+      .filter((p) => productMatchesSearch(p, productSearch))
+  );
+
+  const existingReport = reports.find(
+    (r: any) =>
+      r.date === date &&
+      r.location === "bar" &&
+      r.shift === shift &&
+      (r.status || "active") === "active"
+  );
+
+  const selectedBartender = bartenders.find((b: any) => b.id === bartenderId);
+
+  const cleanItems = items
+    .filter((item) => item.product_id && Number(item.quantity) > 0)
+    .map((item) => ({
+      product_id: item.product_id,
+      quantity: Number(item.quantity)
+    }));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+
+    if (!bartenderId) {
+      setMessage("Izaberi šankera koji je radio smjenu.");
+      return;
+    }
+
+    if (existingReport) {
+      setMessage("Za taj datum i smjenu već postoji aktivan zaključak.");
+      return;
+    }
+
+    if (cleanItems.length === 0) {
+      setMessage("Dodaj bar jednu stavku potrošnje.");
+      return;
+    }
+
+    const shiftLabel = shift === "first" ? "Prva smjena" : "Druga smjena";
+
+    const preview = cleanItems
+      .map((item) => {
+        const product = products.find((p) => p.id === item.product_id);
+        const unit =
+          product?.coffee_per_kg && Number(product.coffee_per_kg) > 0
+            ? "kafa"
+            : product?.unit || "";
+        return `${product?.name || "Artikal"}: ${item.quantity} ${unit}`;
+      })
+      .join("\n");
+
+    const ok = window.confirm(
+      `Potvrditi naknadni unos?\n\nDatum: ${date}\nSmjena: ${shiftLabel}\nŠanker: ${
+        selectedBartender?.full_name || "-"
+      }\n\n${preview}\n\nOvaj unos će odmah umanjiti lager.`
+    );
+
+    if (!ok) return;
+
+    setSaving(true);
+
+    const { error } = await supabase.rpc("submit_admin_consumption", {
+      p_date: date,
+      p_shift: shift,
+      p_bartender_id: bartenderId,
+      p_note: note || null,
+      p_admin_note: adminNote || null,
+      p_items: cleanItems
+    });
+
+    setSaving(false);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage(`Naknadni unos je sačuvan za ${date} - ${shiftLabel}.`);
+    setItems([{ product_id: "", quantity: "" }]);
+    setNote("");
+    refresh();
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <h2 className="text-2xl font-black">Naknadni unos propuštene smjene</h2>
+        <p className="mt-2 text-sm text-black/60">
+          Izaberi datum, smjenu i stvarnog šankera. Unos ulazi u promet,
+          statistiku i odmah umanjuje lager.
+        </p>
+      </Card>
+
+      <Card>
+        <form onSubmit={submit} className="space-y-5">
+          <div className="grid gap-3 md:grid-cols-3">
+            <Field label="Datum smjene">
+              <Input
+                type="date"
+                max={getTodayDate()}
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+            </Field>
+
+            <Field label="Smjena">
+              <Select
+                value={shift}
+                onChange={(e) =>
+                  setShift(e.target.value as "first" | "second")
+                }
+              >
+                <option value="first">Prva smjena</option>
+                <option value="second">Druga smjena</option>
+              </Select>
+            </Field>
+
+            <Field label="Šanker koji je radio">
+              <Select
+                value={bartenderId}
+                onChange={(e) => setBartenderId(e.target.value)}
+              >
+                <option value="">Izaberi šankera</option>
+                {bartenders.map((bartender: any) => (
+                  <option key={bartender.id} value={bartender.id}>
+                    {bartender.full_name || bartender.id}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+
+          {existingReport && (
+            <div className="rounded-2xl bg-red-50 p-4 text-sm font-semibold text-red-800">
+              Za taj datum i smjenu već postoji aktivan zaključak.
+            </div>
+          )}
+
+          <Input
+            placeholder="Pretraži artikal..."
+            value={productSearch}
+            onChange={(e) => setProductSearch(e.target.value)}
+          />
+
+          <div className="space-y-3">
+            {items.map((item, index) => {
+              const selectedProduct = products.find(
+                (p) => p.id === item.product_id
+              );
+
+              const quantityLabel =
+                selectedProduct?.coffee_per_kg &&
+                Number(selectedProduct.coffee_per_kg) > 0
+                  ? "Količina kafa"
+                  : `Količina (${selectedProduct?.unit || "kom"})`;
+
+              return (
+                <div
+                  key={index}
+                  className="grid gap-2 rounded-2xl border p-3 md:grid-cols-[1fr_190px_110px]"
+                >
+                  <Select
+                    value={item.product_id}
+                    onChange={(e) => {
+                      const copy = [...items];
+                      copy[index].product_id = e.target.value;
+                      setItems(copy);
+                    }}
+                  >
+                    <option value="">Izaberi artikal</option>
+                    {activeProducts.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name} {product.package_size || ""}
+                      </option>
+                    ))}
+                  </Select>
+
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder={quantityLabel}
+                    value={item.quantity}
+                    onChange={(e) => {
+                      const copy = [...items];
+                      copy[index].quantity = e.target.value;
+                      setItems(copy);
+                    }}
+                  />
+
+                  <SecondaryButton
+                    type="button"
+                    onClick={() =>
+                      setItems(items.filter((_, i) => i !== index))
+                    }
+                  >
+                    Ukloni
+                  </SecondaryButton>
+                </div>
+              );
+            })}
+          </div>
+
+          <SecondaryButton
+            type="button"
+            onClick={() =>
+              setItems([...items, { product_id: "", quantity: "" }])
+            }
+          >
+            + Dodaj stavku
+          </SecondaryButton>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Napomena smjene">
+              <Textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </Field>
+
+            <Field label="Razlog naknadnog unosa">
+              <Textarea
+                value={adminNote}
+                onChange={(e) => setAdminNote(e.target.value)}
+              />
+            </Field>
+          </div>
+
+          <Button disabled={saving || Boolean(existingReport)}>
+            {saving ? "Čuvam..." : "Sačuvaj naknadni unos i umanji lager"}
+          </Button>
+        </form>
+      </Card>
     </div>
   );
 }
