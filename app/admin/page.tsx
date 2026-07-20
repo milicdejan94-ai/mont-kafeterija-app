@@ -24,6 +24,7 @@ type Tab =
   | "storage"
   | "adjustments"
   | "expenses"
+  | "workers"
   | "historical"
   | "backfill"
   | "daily"
@@ -70,6 +71,11 @@ type OperatingExpense = {
   amount: number;
   note: string | null;
   created_by: string | null;
+  worker_id: string | null;
+  payment_kind: string | null;
+  work_days: number | null;
+  payment_period_from: string | null;
+  payment_period_to: string | null;
   created_at: string;
 };
 
@@ -459,6 +465,7 @@ export default function AdminPage() {
     ["receipt", "Prijem robe"],
     ["adjustments", "Korekcije"],
     ["expenses", "Troškovi"],
+    ["workers", "Radnice i dnevnice"],
     ["historical", "Istorijski promet"],
     ["backfill", "Naknadni unos smjene"],
     ["daily", "Dnevni zaključak"],
@@ -567,6 +574,17 @@ export default function AdminPage() {
           <ExpensesView
             expenses={expenses}
             suppliers={suppliers}
+            bartenders={bartenders}
+            refresh={refreshAll}
+            setMessage={setMessage}
+          />
+        )}
+
+        {tab === "workers" && (
+          <WorkersPaymentsView
+            bartenders={bartenders}
+            reports={activeReports}
+            expenses={expenses}
             refresh={refreshAll}
             setMessage={setMessage}
           />
@@ -3048,6 +3066,288 @@ function AdminBackfillShiftView({
 }
 
 
+
+function WorkersPaymentsView({
+  bartenders,
+  reports,
+  expenses,
+  refresh,
+  setMessage
+}: {
+  bartenders: any[];
+  reports: any[];
+  expenses: OperatingExpense[];
+  refresh: () => void;
+  setMessage: (message: string) => void;
+}) {
+  const [fromDate, setFromDate] = useState(getMonthStart());
+  const [toDate, setToDate] = useState(getTodayDate());
+  const [selectedWorkerId, setSelectedWorkerId] = useState("");
+  const [search, setSearch] = useState("");
+
+  const activeShiftReports = useMemo(
+    () =>
+      reports.filter(
+        (r: any) =>
+          (r.status || "active") !== "cancelled" &&
+          (r.shift === "first" || r.shift === "second") &&
+          isDateInRange(r.date, fromDate, toDate)
+      ),
+    [reports, fromDate, toDate]
+  );
+
+  const paymentExpenses = useMemo(
+    () =>
+      expenses.filter(
+        (expense) =>
+          Boolean(expense.worker_id) &&
+          isDateInRange(expense.date, fromDate, toDate)
+      ),
+    [expenses, fromDate, toDate]
+  );
+
+  const workerRows = useMemo(() => {
+    return bartenders
+      .map((worker: any) => {
+        const workerReports = activeShiftReports.filter(
+          (report: any) => report.user_id === worker.id
+        );
+        const workerPayments = paymentExpenses.filter(
+          (expense) => expense.worker_id === worker.id
+        );
+
+        let sale = 0;
+        let purchase = 0;
+
+        workerReports.forEach((report: any) => {
+          report.consumption_items?.forEach((item: any) => {
+            const values = calculateConsumptionItemValues(item);
+            sale += values.sale;
+            purchase += values.purchase;
+          });
+        });
+
+        const paid = workerPayments.reduce(
+          (sum, expense) => sum + Number(expense.amount ?? 0),
+          0
+        );
+        const paidDays = workerPayments.reduce(
+          (sum, expense) => sum + Number(expense.work_days ?? 0),
+          0
+        );
+        const lastPayment = [...workerPayments].sort((a, b) =>
+          String(b.date).localeCompare(String(a.date))
+        )[0];
+
+        const bestShift = workerReports
+          .map((report: any) => ({
+            report,
+            sale: reportDocumentTotals(report).sale
+          }))
+          .sort((a: any, b: any) => b.sale - a.sale)[0];
+
+        return {
+          worker,
+          reports: workerReports,
+          payments: workerPayments,
+          shifts: workerReports.length,
+          firstShifts: workerReports.filter((r: any) => r.shift === "first").length,
+          secondShifts: workerReports.filter((r: any) => r.shift === "second").length,
+          sale,
+          purchase,
+          profit: sale - purchase,
+          averageSale: workerReports.length ? sale / workerReports.length : 0,
+          paid,
+          paidDays,
+          lastPayment,
+          bestShift
+        };
+      })
+      .filter((row: any) => {
+        const q = normalizeText(search);
+        return !q || normalizeText(row.worker.full_name).includes(q);
+      })
+      .sort((a: any, b: any) => b.sale - a.sale);
+  }, [bartenders, activeShiftReports, paymentExpenses, search]);
+
+  const selectedRow = workerRows.find(
+    (row: any) => row.worker.id === selectedWorkerId
+  );
+
+  const unassignedPayments = expenses.filter(
+    (expense) =>
+      !expense.worker_id &&
+      isDateInRange(expense.date, fromDate, toDate) &&
+      (expense.category === "Plate" || expense.expense_type === "salary")
+  );
+
+  async function assignPayment(expenseId: string, workerId: string) {
+    if (!workerId) return;
+
+    const { error } = await supabase
+      .from("operating_expenses")
+      .update({ worker_id: workerId, payment_kind: "dnevnica" })
+      .eq("id", expenseId);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage("Isplata je povezana sa radnicom.");
+    refresh();
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <h2 className="text-2xl font-black">Radnice, smjene i isplaćene dnevnice</h2>
+        <p className="mt-2 text-sm text-black/60">
+          Promet i zarada se automatski računaju iz zaključenih smjena. Isplate se
+          povlače iz troškovnika kada je kod troška izabrana radnica.
+        </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-[180px_180px_1fr_auto] md:items-end">
+          <Field label="Od datuma">
+            <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          </Field>
+          <Field label="Do datuma">
+            <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          </Field>
+          <Field label="Pretraga radnice">
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Ime radnice..." />
+          </Field>
+          <SecondaryButton
+            type="button"
+            onClick={() => {
+              setFromDate(getMonthStart());
+              setToDate(getTodayDate());
+              setSearch("");
+              setSelectedWorkerId("");
+            }}
+          >
+            Reset
+          </SecondaryButton>
+        </div>
+      </Card>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {workerRows.map((row: any) => (
+          <Card key={row.worker.id}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm text-black/50">Radnica</p>
+                <h3 className="text-2xl font-black">{row.worker.full_name || "Bez imena"}</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedWorkerId(row.worker.id)}
+                className="rounded-xl bg-black/5 px-3 py-2 text-sm font-black hover:bg-black/10"
+              >
+                Detalji
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-2 md:grid-cols-2">
+              <div className="rounded-xl bg-black/5 p-3">
+                <p className="text-xs text-black/50">Odrađene smjene</p>
+                <b>{row.shifts}</b>
+                <p className="text-xs text-black/50">Prva {row.firstShifts} • Druga {row.secondShifts}</p>
+              </div>
+              <div className="rounded-xl bg-black/5 p-3">
+                <p className="text-xs text-black/50">Promet u smjenama</p>
+                <b>{money(row.sale)}</b>
+              </div>
+              <div className="rounded-xl bg-mont-gold/20 p-3">
+                <p className="text-xs text-black/50">Zarada od robe</p>
+                <b>{money(row.profit)}</b>
+              </div>
+              <div className="rounded-xl bg-black/5 p-3">
+                <p className="text-xs text-black/50">Prosjek prometa / smjena</p>
+                <b>{money(row.averageSale)}</b>
+              </div>
+              <div className="rounded-xl bg-green-50 p-3">
+                <p className="text-xs text-green-800">Ukupno isplaćeno</p>
+                <b className="text-green-900">{money(row.paid)}</b>
+                {row.paidDays > 0 && <p className="text-xs text-green-800">{row.paidDays.toFixed(1)} plaćenih dana</p>}
+              </div>
+              <div className="rounded-xl bg-black/5 p-3">
+                <p className="text-xs text-black/50">Posljednja isplata</p>
+                <b>{row.lastPayment ? `${row.lastPayment.date} • ${money(row.lastPayment.amount)}` : "-"}</b>
+              </div>
+            </div>
+
+            {row.bestShift && (
+              <p className="mt-3 text-sm text-black/60">
+                Najbolja smjena: <b>{row.bestShift.report.date}</b> — {row.bestShift.report.shift === "first" ? "prva" : "druga"} — <b>{money(row.bestShift.sale)}</b>
+              </p>
+            )}
+          </Card>
+        ))}
+      </div>
+
+      {selectedRow && (
+        <Card>
+          <div className="flex justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-black">Detalji — {selectedRow.worker.full_name}</h2>
+              <p className="text-sm text-black/60">Smjene i isplate u izabranom periodu.</p>
+            </div>
+            <SecondaryButton type="button" onClick={() => setSelectedWorkerId("")}>Zatvori</SecondaryButton>
+          </div>
+
+          <CollapsibleSection title="Smjene" defaultOpen={true}>
+            <div className="overflow-auto rounded-xl border">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-black/5"><tr><th className="p-3">Datum</th><th>Smjena</th><th>Promet</th><th>Nabavna</th><th>Zarada</th></tr></thead>
+                <tbody>
+                  {selectedRow.reports.map((report: any) => {
+                    const totals = reportDocumentTotals(report);
+                    return <tr key={report.id} className="border-t"><td className="p-3">{report.date}</td><td>{report.shift === "first" ? "Prva" : "Druga"}</td><td>{money(totals.sale)}</td><td>{money(totals.purchase)}</td><td className="font-black">{money(totals.profit)}</td></tr>;
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Istorija isplata" defaultOpen={true}>
+            {selectedRow.payments.length === 0 ? <p className="text-sm text-black/60">Nema povezanih isplata.</p> : (
+              <div className="overflow-auto rounded-xl border">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-black/5"><tr><th className="p-3">Datum isplate</th><th>Vrsta</th><th>Period</th><th>Dana</th><th>Opis</th><th>Iznos</th></tr></thead>
+                  <tbody>
+                    {selectedRow.payments.map((expense: OperatingExpense) => <tr key={expense.id} className="border-t"><td className="p-3">{expense.date}</td><td>{expense.payment_kind || "Dnevnica"}</td><td>{expense.payment_period_from || "-"} – {expense.payment_period_to || "-"}</td><td>{expense.work_days ? Number(expense.work_days).toFixed(1) : "-"}</td><td>{expense.description || expense.note || "-"}</td><td className="font-black">{money(expense.amount)}</td></tr>)}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CollapsibleSection>
+        </Card>
+      )}
+
+      {unassignedPayments.length > 0 && (
+        <Card>
+          <h2 className="text-xl font-black">Stare isplate koje nisu povezane sa radnicom</h2>
+          <p className="mt-1 text-sm text-black/60">Izaberi radnicu da bi se stari trošak prikazivao u njenoj istoriji isplata.</p>
+          <div className="mt-4 space-y-2">
+            {unassignedPayments.map((expense) => (
+              <div key={expense.id} className="grid gap-2 rounded-xl border p-3 md:grid-cols-[150px_1fr_140px_260px] md:items-center">
+                <b>{expense.date}</b>
+                <span>{expense.description || expense.note || expense.category}</span>
+                <b>{money(expense.amount)}</b>
+                <Select defaultValue="" onChange={(e) => assignPayment(expense.id, e.target.value)}>
+                  <option value="">Poveži sa radnicom...</option>
+                  {bartenders.map((worker: any) => <option key={worker.id} value={worker.id}>{worker.full_name}</option>)}
+                </Select>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function HistoricalRevenueView({
   historicalRevenue
 }: {
@@ -3938,13 +4238,18 @@ const expenseCategories = [
   "Ostalo"
 ];
 
-function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
+function ExpensesView({ expenses, suppliers = [], bartenders = [], refresh, setMessage }: any) {
   const [form, setForm] = useState({
     date: getTodayDate(),
     category: "Plate",
     supplier: "",
     expense_type: "operational",
     affects_operational_profit: true,
+    worker_id: "",
+    payment_kind: "dnevnica",
+    work_days: "",
+    payment_period_from: "",
+    payment_period_to: "",
     description: "",
     amount: "",
     note: ""
@@ -3967,6 +4272,8 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
           normalizeText(e.supplier).includes(q) ||
           normalizeText(e.expense_type).includes(q) ||
           normalizeText(expenseTypeLabel(e.expense_type)).includes(q) ||
+          normalizeText(bartenders.find((b: any) => b.id === e.worker_id)?.full_name).includes(q) ||
+          normalizeText(e.payment_kind).includes(q) ||
           normalizeText(e.description).includes(q) ||
           normalizeText(e.note).includes(q)
         );
@@ -4032,6 +4339,11 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
       supplier: form.supplier || null,
       expense_type: form.expense_type,
       affects_operational_profit: form.affects_operational_profit,
+      worker_id: form.worker_id || null,
+      payment_kind: form.worker_id ? form.payment_kind || "dnevnica" : null,
+      work_days: form.work_days === "" ? null : Number(form.work_days),
+      payment_period_from: form.payment_period_from || null,
+      payment_period_to: form.payment_period_to || null,
       description: form.description || null,
       amount: Number(form.amount),
       note: form.note || null,
@@ -4050,6 +4362,11 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
       supplier: "",
       expense_type: "operational",
       affects_operational_profit: true,
+      worker_id: "",
+      payment_kind: "dnevnica",
+      work_days: "",
+      payment_period_from: "",
+      payment_period_to: "",
       description: "",
       amount: "",
       note: ""
@@ -4142,6 +4459,64 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
                 </option>
               ))}
             </Select>
+          </Field>
+
+          <Field label="Radnica (za platu/dnevnicu)">
+            <Select
+              value={form.worker_id}
+              onChange={(e) => setForm({ ...form, worker_id: e.target.value })}
+            >
+              <option value="">Nije vezano za radnicu</option>
+              {bartenders.map((bartender: any) => (
+                <option key={bartender.id} value={bartender.id}>
+                  {bartender.full_name || bartender.id}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Field label="Vrsta isplate">
+            <Select
+              value={form.payment_kind}
+              onChange={(e) => setForm({ ...form, payment_kind: e.target.value })}
+              disabled={!form.worker_id}
+            >
+              <option value="dnevnica">Dnevnica</option>
+              <option value="plata">Plata</option>
+              <option value="zamjena">Zamjena</option>
+              <option value="bonus">Bonus</option>
+              <option value="ostalo">Ostalo</option>
+            </Select>
+          </Field>
+
+          <Field label="Broj plaćenih dana">
+            <Input
+              type="number"
+              step="0.5"
+              min="0"
+              placeholder="npr. 6"
+              value={form.work_days}
+              onChange={(e) => setForm({ ...form, work_days: e.target.value })}
+              disabled={!form.worker_id}
+            />
+          </Field>
+
+          <Field label="Period od">
+            <Input
+              type="date"
+              value={form.payment_period_from}
+              onChange={(e) => setForm({ ...form, payment_period_from: e.target.value })}
+              disabled={!form.worker_id}
+            />
+          </Field>
+
+          <Field label="Period do">
+            <Input
+              type="date"
+              value={form.payment_period_to}
+              onChange={(e) => setForm({ ...form, payment_period_to: e.target.value })}
+              disabled={!form.worker_id}
+            />
           </Field>
 
           <Field label="Opis">
@@ -4309,6 +4684,8 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
                     <th>Kategorija</th>
                     <th>Komitent</th>
                     <th>Tip</th>
+                    <th>Radnica</th>
+                    <th>Isplata / period</th>
                     <th>Operativno</th>
                     <th>Opis</th>
                     <th>Napomena</th>
@@ -4324,6 +4701,22 @@ function ExpensesView({ expenses, suppliers = [], refresh, setMessage }: any) {
                       <td className="font-semibold">{expense.category}</td>
                       <td>{expense.supplier || "-"}</td>
                       <td>{expenseTypeLabel(expense.expense_type)}</td>
+                      <td className="font-semibold">
+                        {bartenders.find((b: any) => b.id === expense.worker_id)?.full_name || "-"}
+                      </td>
+                      <td>
+                        {expense.worker_id ? (
+                          <div className="text-xs">
+                            <b>{expense.payment_kind || "dnevnica"}</b>
+                            {expense.work_days ? ` • ${Number(expense.work_days).toFixed(1)} dana` : ""}
+                            {(expense.payment_period_from || expense.payment_period_to) && (
+                              <p className="text-black/50">
+                                {expense.payment_period_from || "?"} – {expense.payment_period_to || "?"}
+                              </p>
+                            )}
+                          </div>
+                        ) : "-"}
+                      </td>
                       <td>
                         {expense.affects_operational_profit === false ? (
                           <span className="rounded-full bg-orange-50 px-2 py-1 text-xs font-black text-orange-800">
