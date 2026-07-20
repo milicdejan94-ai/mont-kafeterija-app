@@ -589,7 +589,12 @@ export default function AdminPage() {
         {tab === "daily" && <DailySummaryView reports={activeReports} />}
 
         {tab === "locked" && (
-          <LockedShiftsView reports={reports} refresh={refreshAll} setMessage={setMessage} />
+          <LockedShiftsView
+            reports={reports}
+            products={products}
+            refresh={refreshAll}
+            setMessage={setMessage}
+          />
         )}
 
         {tab === "suppliers" && (
@@ -2266,10 +2271,12 @@ function reportUserName(report: any) {
 
 function LockedShiftsView({
   reports,
+  products,
   refresh,
   setMessage
 }: {
   reports: any[];
+  products: Product[];
   refresh: () => void;
   setMessage: (message: string) => void;
 }) {
@@ -2277,6 +2284,7 @@ function LockedShiftsView({
   const [toDate, setToDate] = useState(getTodayDate());
   const [search, setSearch] = useState("");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [addingToReportId, setAddingToReportId] = useState<string | null>(null);
 
   const activeBarShiftReports = useMemo(() => {
     return reports.filter((r: any) => {
@@ -2494,6 +2502,28 @@ function LockedShiftsView({
                         >
                           {cancellingId === row.first.id ? "Poništavam..." : "Poništi smjenu"}
                         </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAddingToReportId(
+                              addingToReportId === row.first.id ? null : row.first.id
+                            )
+                          }
+                          className="ml-2 mt-2 rounded-lg bg-green-50 px-3 py-1 text-xs font-semibold text-green-800 hover:bg-green-100"
+                        >
+                          + Dodaj zaboravljenu stavku
+                        </button>
+
+                        {addingToReportId === row.first.id && (
+                          <AdminAddMissingItem
+                            report={row.first}
+                            products={products}
+                            refresh={refresh}
+                            setMessage={setMessage}
+                            onClose={() => setAddingToReportId(null)}
+                          />
+                        )}
                       </div>
                     ) : (
                       <span className="rounded-full bg-red-50 px-2 py-1 text-xs font-black text-red-800">
@@ -2537,6 +2567,28 @@ function LockedShiftsView({
                         >
                           {cancellingId === row.second.id ? "Poništavam..." : "Poništi smjenu"}
                         </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAddingToReportId(
+                              addingToReportId === row.second.id ? null : row.second.id
+                            )
+                          }
+                          className="ml-2 mt-2 rounded-lg bg-green-50 px-3 py-1 text-xs font-semibold text-green-800 hover:bg-green-100"
+                        >
+                          + Dodaj zaboravljenu stavku
+                        </button>
+
+                        {addingToReportId === row.second.id && (
+                          <AdminAddMissingItem
+                            report={row.second}
+                            products={products}
+                            refresh={refresh}
+                            setMessage={setMessage}
+                            onClose={() => setAddingToReportId(null)}
+                          />
+                        )}
                       </div>
                     ) : (
                       <span className="rounded-full bg-red-50 px-2 py-1 text-xs font-black text-red-800">
@@ -2597,6 +2649,137 @@ function LockedShiftsView({
 }
 
 
+
+
+function AdminAddMissingItem({
+  report,
+  products,
+  refresh,
+  setMessage,
+  onClose
+}: {
+  report: any;
+  products: Product[];
+  refresh: () => void;
+  setMessage: (message: string) => void;
+  onClose: () => void;
+}) {
+  const [productId, setProductId] = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [reason, setReason] = useState("Zaboravljeno u prvobitnom izvještaju");
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const activeProducts = sortProductsAZ(
+    products
+      .filter((product) => product.active)
+      .filter((product) => productMatchesSearch(product, search))
+  );
+
+  const selectedProduct = products.find((product) => product.id === productId);
+  const isCoffee = Number(selectedProduct?.coffee_per_kg ?? 0) > 0;
+  const shiftName = report.shift === "first" ? "Prva smjena" : "Druga smjena";
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+
+    if (!productId) {
+      setMessage("Izaberi artikal koji je zaboravljen.");
+      return;
+    }
+
+    if (!quantity || Number(quantity) <= 0) {
+      setMessage("Unesi količinu veću od nule.");
+      return;
+    }
+
+    if (!reason.trim()) {
+      setMessage("Razlog dopune je obavezan.");
+      return;
+    }
+
+    const unit = isCoffee ? "kafa" : selectedProduct?.unit || "kom";
+    const ok = window.confirm(
+      `Dodati stavku u zaključenu smjenu?\n\nDatum: ${report.date}\nSmjena: ${shiftName}\nŠanker: ${reportUserName(
+        report
+      )}\nArtikal: ${selectedProduct?.name}\nKoličina: ${Number(quantity).toFixed(
+        2
+      )} ${unit}\n\nLager, promet i zarada će odmah biti ispravljeni.`
+    );
+
+    if (!ok) return;
+
+    setSaving(true);
+
+    const { error } = await supabase.rpc("add_admin_consumption_item", {
+      p_report_id: report.id,
+      p_product_id: productId,
+      p_quantity: Number(quantity),
+      p_reason: reason.trim()
+    });
+
+    setSaving(false);
+
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+
+    setMessage(
+      `${selectedProduct?.name} je naknadno dodan u ${report.date} - ${shiftName}.`
+    );
+    refresh();
+    onClose();
+  }
+
+  return (
+    <form
+      onSubmit={submit}
+      className="mt-3 space-y-3 rounded-2xl border border-green-200 bg-green-50 p-3"
+    >
+      <p className="font-black text-green-900">Dopuna zaključenog izvještaja</p>
+
+      <Input
+        placeholder="Pretraži artikal..."
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+
+      <Select value={productId} onChange={(e) => setProductId(e.target.value)}>
+        <option value="">Izaberi zaboravljeni artikal</option>
+        {activeProducts.map((product) => (
+          <option key={product.id} value={product.id}>
+            {product.name} {product.package_size || ""}
+          </option>
+        ))}
+      </Select>
+
+      <Input
+        type="number"
+        step={isCoffee ? "1" : "0.01"}
+        min="0"
+        placeholder={isCoffee ? "Broj kafa" : `Količina (${selectedProduct?.unit || "kom"})`}
+        value={quantity}
+        onChange={(e) => setQuantity(e.target.value)}
+      />
+
+      <Textarea
+        placeholder="Razlog dopune"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+      />
+
+      <div className="flex flex-wrap gap-2">
+        <Button disabled={saving}>
+          {saving ? "Dodajem..." : "Dodaj u zaključeni izvještaj"}
+        </Button>
+        <SecondaryButton type="button" onClick={onClose}>
+          Odustani
+        </SecondaryButton>
+      </div>
+    </form>
+  );
+}
 
 function AdminBackfillShiftView({
   products,
@@ -3458,6 +3641,11 @@ function ShiftSummaryCard({
             return (
               <li key={it.id}>
                 {it.products?.name}: <b>{Number(it.quantity).toFixed(2)}</b>
+                {it.added_by_admin && (
+                  <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-black text-green-800">
+                    Admin dopuna
+                  </span>
+                )}
                 {showMoney && <> — promet {money(values.sale)}</>}
               </li>
             );
@@ -5005,8 +5193,13 @@ function Reports({ reports, receipts, expenses = [], historicalRevenue = [] }: a
                     return (
                       <li key={it.id}>
                         {it.products?.name}: {" "}
-                        <b>{Number(it.quantity).toFixed(2)}</b> — promet {" "}
-                        {money(values.sale)} — zarada {money(values.profit)}
+                        <b>{Number(it.quantity).toFixed(2)}</b>
+                        {it.added_by_admin && (
+                          <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-black text-green-800">
+                            Admin dopuna
+                          </span>
+                        )}
+                        {" "}— promet {money(values.sale)} — zarada {money(values.profit)}
                       </li>
                     );
                   })}
